@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #4f46e5;
+  --color-brand-dark: #4338ca;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Waveform bars animation */
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.4); }
+  50% { transform: scaleY(1); }
+}
+
+.wave-bar {
+  animation: wave 0.8s ease-in-out infinite;
+  transform-origin: bottom;
+}
