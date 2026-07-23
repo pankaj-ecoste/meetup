@@ -19,11 +19,14 @@ print(f"SUPABASE_URL loaded: {os.environ.get('SUPABASE_URL', 'NOT FOUND')}")
 from supabase import create_client
 
 client = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
+# Set LOGIN_LINK_EMAIL in .env (falls back to the founder account below).
+login_email = os.environ.get("LOGIN_LINK_EMAIL", "ai.support@ecoste.in")
 response = client.auth.admin.generate_link({
     "type": "magiclink",
-    "email": "pankaj.exe9021@gmail.com",
+    "email": login_email,
+    "options": {"redirect_to": "http://localhost:3000/login"},
 })
 
-print("\n✅ Open this link in your browser to sign in:\n")
+print("\n[OK] Open this link in your browser to sign in:\n")
 print(response.properties.action_link)
 print()

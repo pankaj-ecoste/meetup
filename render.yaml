@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: meetup-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Pin the Python version Render builds with.
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      # Secrets — set these values in the Render dashboard (sync:false = not stored in git).
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ASSEMBLYAI_API_KEY
+        sync: false
+      # Comma-separated allowed origins for CORS (Vercel URL[, http://localhost:3000]).
+      - key: FRONTEND_URL
+        sync: false

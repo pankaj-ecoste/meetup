@@ -9,9 +9,17 @@ from routers import auth, recordings, tasks, extensions, meetings, ideas, perfor
 
 app = FastAPI(title="MeetUp API", version="0.1.0")
 
+# FRONTEND_URL may be a single origin or a comma-separated list
+# (e.g. the Vercel production URL plus http://localhost:3000 for local dev).
+_frontend_origins = [
+    o.strip()
+    for o in os.getenv("FRONTEND_URL", "http://localhost:3000").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("FRONTEND_URL", "http://localhost:3000")],
+    allow_origins=_frontend_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
