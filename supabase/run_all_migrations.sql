@@ -396,6 +396,35 @@ insert into designations (id, name, capability_tier, company_id) values
   ('00000000-0000-0000-0002-000000000003', 'Director',   'leadership', '00000000-0000-0000-0000-000000000001')
 on conflict do nothing;
 
+-- ── 0016: company codes + collapse designations to 2 global roles ───────
+-- (Company UUIDs were confusing to reference by hand; designations.company_id
+-- was never actually filtered on anywhere in the app, so it's relaxed and the
+-- old per-company designation set collapses to exactly 2 rows: "Employee"
+-- (standard) and "CEO" (leadership — cross-company delegation + full
+-- cross-org dashboard). See migrations/0016_company_code_and_ceo_designation.sql.)
+alter table companies add column if not exists code smallint;
+update companies set code = 1001 where name = 'Ecoste';
+update companies set code = 1002 where name = 'Lamora';
+update companies set code = 1003 where name = 'Metamask';
+alter table companies alter column code set not null;
+create unique index if not exists idx_companies_code on companies (code);
+
+alter table designations alter column company_id drop not null;
+
+update users set designation_id = '00000000-0000-0000-0002-000000000002'
+  where designation_id = '00000000-0000-0000-0001-000000000001'
+     or designation_id = '00000000-0000-0000-0002-000000000001';
+
+update designations set company_id = null
+  where id = '00000000-0000-0000-0002-000000000002'; -- CEO
+update designations set name = 'Employee', company_id = null
+  where id = '00000000-0000-0000-0001-000000000001'; -- was Ecoste Team Lead
+
+delete from designations where id not in (
+  '00000000-0000-0000-0002-000000000002', -- CEO
+  '00000000-0000-0000-0001-000000000001'  -- Employee
+);
+
 -- ── Founder user row ─────────────────────────────────────────
 -- Run this AFTER the founder logs in via OTP for the first time.
 -- Replace <FOUNDER_AUTH_UID> with the UUID from Authentication → Users in Supabase dashboard.

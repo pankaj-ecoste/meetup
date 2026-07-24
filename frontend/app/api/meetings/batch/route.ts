@@ -1,4 +1,4 @@
-import { requireUser } from '@/lib/server/auth'
+import { requireUser, HttpError } from '@/lib/server/auth'
 import { supabaseAdmin } from '@/lib/server/supabaseAdmin'
 import { jsonError } from '@/lib/server/http'
 
@@ -22,6 +22,23 @@ export async function POST(request: Request) {
     const user = await requireUser(request)
     const body = (await request.json().catch(() => ({}))) as BatchBody
     const admin = supabaseAdmin()
+
+    // Standard employees may only delegate within their own company; CEO
+    // (leadership tier) can delegate across all three.
+    if (user.capability_tier !== 'leadership') {
+      const ids = (body.tasks ?? []).flatMap((t) => [t.assignee_id, t.report_to_id])
+      if (ids.length > 0) {
+        const { data: targets, error: targetsErr } = await admin
+          .from('users')
+          .select('id, company_id')
+          .in('id', ids)
+        if (targetsErr) throw targetsErr
+        const outsideCompany = (targets ?? []).some((t) => t.company_id !== user.company_id)
+        if (outsideCompany) {
+          throw new HttpError(403, 'You can only delegate tasks within your own company')
+        }
+      }
+    }
 
     const { data: meetingRows, error: mErr } = await admin
       .from('meetings')

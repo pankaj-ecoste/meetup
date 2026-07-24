@@ -32,6 +32,22 @@ export async function POST(request: Request) {
     }
 
     const admin = supabaseAdmin()
+
+    // Standard employees may only delegate within their own company; CEO
+    // (leadership tier) can delegate across all three. Enforced here too,
+    // not just by scoping the /api/users dropdown — never trust the client.
+    if (user.capability_tier !== 'leadership') {
+      const { data: targets, error: targetsErr } = await admin
+        .from('users')
+        .select('id, company_id')
+        .in('id', [body.assignee_id, body.report_to_id])
+      if (targetsErr) throw targetsErr
+      const outsideCompany = (targets ?? []).some((t) => t.company_id !== user.company_id)
+      if (outsideCompany) {
+        throw new HttpError(403, 'You can only delegate tasks within your own company')
+      }
+    }
+
     const { data: inserted, error: insErr } = await admin
       .from('tasks')
       .insert({

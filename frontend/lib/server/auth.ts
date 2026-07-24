@@ -38,7 +38,7 @@ export async function requireUser(req: Request): Promise<UserProfile> {
 
   const { data, error } = await admin
     .from('users')
-    .select('*, companies(name), designations(capability_tier)')
+    .select('*, companies(name, code), designations(capability_tier)')
     .eq('auth_id', authUid)
     .eq('is_active', true)
     .single()
@@ -54,6 +54,7 @@ export async function requireUser(req: Request): Promise<UserProfile> {
     phone: data.phone ?? undefined,
     company_id: data.company_id,
     company_name: data.companies?.name ?? '',
+    company_code: data.companies?.code ?? undefined,
     designation_id: data.designation_id ?? undefined,
     capability_tier: data.designations?.capability_tier ?? undefined,
     is_active: data.is_active,

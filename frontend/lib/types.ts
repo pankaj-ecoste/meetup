@@ -4,6 +4,7 @@ export type UserBrief = {
   email: string
   company_id: string
   company_name: string
+  company_code?: number
 }
 
 export type UserProfile = UserBrief & {

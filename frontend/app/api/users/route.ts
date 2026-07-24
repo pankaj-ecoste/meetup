@@ -8,7 +8,7 @@ import type { UserBrief } from '@/lib/types'
 // Ports backend /users.
 export async function GET(request: Request) {
   try {
-    await requireUser(request) // auth gate only
+    const caller = await requireUser(request)
     const search = new URL(request.url).searchParams.get('search') ?? ''
 
     let query = supabaseAdmin()
@@ -16,6 +16,12 @@ export async function GET(request: Request) {
       .select('id, name, email, company_id, companies(name)')
       .eq('is_active', true)
       .order('name')
+
+    // Standard employees can only delegate within their own company; CEO
+    // (leadership tier) can delegate to anyone across all three companies.
+    if (caller.capability_tier !== 'leadership') {
+      query = query.eq('company_id', caller.company_id)
+    }
 
     if (search) {
       query = query.ilike('name', `%${search}%`)
