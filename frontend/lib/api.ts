@@ -78,6 +78,9 @@ export const api = {
   orgPerformance: (token: string, search = '') =>
     authFetch(`/performance/org?search=${encodeURIComponent(search)}`, token),
 
+  recordingJob: (token: string, jobId: string) =>
+    authFetch(`/recordings/jobs/${jobId}`, token),
+
   uploadRecording: async (token: string, file: Blob, jobType: string, filename: string) => {
     const form = new FormData()
     form.append('file', file, filename)

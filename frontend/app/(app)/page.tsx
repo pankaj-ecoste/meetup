@@ -45,14 +45,11 @@ export default function DashboardPage() {
       const tok = session.access_token
       setToken(tok)
 
-      // Check profile exists
-      try {
-        await api.me(tok)
-      } catch {
-        setProfileError(true)
-      }
-
-      await fetchCounts(tok)
+      // Profile-exists check and counts are independent — run them together
+      // instead of one after another so the dashboard's first paint doesn't
+      // wait on two sequential network round trips.
+      const [meResult] = await Promise.allSettled([api.me(tok), fetchCounts(tok)])
+      if (meResult.status === 'rejected') setProfileError(true)
       setLoading(false)
 
       // Subscribe to task changes for live counts

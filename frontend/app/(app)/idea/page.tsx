@@ -6,18 +6,16 @@ import { createClient } from '@/lib/supabase/client'
 import { api } from '@/lib/api'
 import RecordButton from '@/components/RecordButton'
 import ReviewForm from '@/components/ReviewForm'
-import type { IdeaResponse, JobStatus } from '@/lib/types'
-
-type Stage = 'idle' | 'uploading' | 'processing' | 'review' | 'done' | 'error'
+import ProcessingSteps from '@/components/ProcessingSteps'
+import { useRecordingJob } from '@/lib/useRecordingJob'
+import type { IdeaResponse } from '@/lib/types'
 
 export default function IdeaPage() {
   const router = useRouter()
   const [token, setToken] = useState('')
-  const [stage, setStage] = useState<Stage>('idle')
-  const [jobResult, setJobResult] = useState<Record<string, unknown> | null>(null)
-  const [errMsg, setErrMsg] = useState('')
   const [ideas, setIdeas] = useState<IdeaResponse[]>([])
   const [loadingIdeas, setLoadingIdeas] = useState(false)
+  const { stage, statusLabel, jobResult, errMsg, start, reset } = useRecordingJob('idea')
 
   useEffect(() => {
     async function init() {
@@ -39,43 +37,7 @@ export default function IdeaPage() {
     setLoadingIdeas(false)
   }
 
-  async function handleRecordingComplete(blob: Blob, filename: string) {
-    if (!token) return
-    setStage('uploading')
-    setErrMsg('')
-
-    const supabase = createClient()
-
-    try {
-      const job = await api.uploadRecording(token, blob, 'idea', filename)
-      setStage('processing')
-
-      const channel = supabase
-        .channel(`job-${job.id}`)
-        .on(
-          'postgres_changes',
-          { event: 'UPDATE', schema: 'public', table: 'recording_jobs', filter: `id=eq.${job.id}` },
-          (payload) => {
-            const row = payload.new as { status: JobStatus; result?: Record<string, unknown>; error_msg?: string }
-            if (row.status === 'done') {
-              channel.unsubscribe()
-              setJobResult(row.result ?? {})
-              setStage('review')
-            } else if (row.status === 'error') {
-              channel.unsubscribe()
-              setErrMsg(row.error_msg ?? 'Processing failed')
-              setStage('error')
-            }
-          }
-        )
-        .subscribe()
-    } catch (e) {
-      setErrMsg((e as Error).message)
-      setStage('error')
-    }
-  }
-
-  const content = (
+  return (
     <div className="max-w-lg mx-auto px-4 py-6">
       <h2 className="text-xl font-bold text-gray-900 mb-1">New Idea</h2>
       <p className="text-sm text-gray-500 mb-8">
@@ -85,10 +47,7 @@ export default function IdeaPage() {
       {stage === 'idle' && (
         <>
           <div className="flex flex-col items-center py-8 mb-8">
-            <RecordButton
-              onRecordingComplete={handleRecordingComplete}
-              maxSeconds={300}
-            />
+            <RecordButton onRecordingComplete={start} maxSeconds={300} />
           </div>
 
           {/* Recent ideas feed */}
@@ -126,12 +85,9 @@ export default function IdeaPage() {
         </>
       )}
 
-      {(stage === 'uploading' || stage === 'processing') && (
-        <div className="flex flex-col items-center py-12 gap-4">
-          <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
-          <p className="text-gray-600 text-sm font-medium">
-            {stage === 'uploading' ? 'Uploading…' : 'Transcribing idea…'}
-          </p>
+      {(stage === 'uploading' || stage === 'pending' || stage === 'transcribing' || stage === 'extracting') && (
+        <div className="flex flex-col items-center py-12">
+          <ProcessingSteps stage={stage} label={statusLabel} />
         </div>
       )}
 
@@ -139,7 +95,7 @@ export default function IdeaPage() {
         <div className="bg-red-50 border border-red-200 rounded-2xl p-5 text-center">
           <p className="text-red-700 font-medium mb-2">Something went wrong</p>
           <p className="text-red-600 text-sm mb-4">{errMsg}</p>
-          <button onClick={() => { setStage('idle'); setErrMsg('') }} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
+          <button onClick={reset} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
             Try again
           </button>
         </div>
@@ -151,21 +107,9 @@ export default function IdeaPage() {
           result={jobResult}
           users={[]}
           token={token}
-          onDone={() => { setStage('idle'); loadIdeas(token) }}
+          onDone={() => { reset(); loadIdeas(token) }}
         />
-      )}
-
-      {stage === 'done' && (
-        <div className="text-center py-12">
-          <div className="text-5xl mb-4">💡</div>
-          <h3 className="text-lg font-semibold mb-2">Idea saved!</h3>
-          <button onClick={() => setStage('idle')} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
-            Record another
-          </button>
-        </div>
       )}
     </div>
   )
-
-  return content
 }

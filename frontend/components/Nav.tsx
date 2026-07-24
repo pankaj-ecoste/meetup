@@ -1,10 +1,9 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { api } from '@/lib/api'
 import type { UserProfile } from '@/lib/types'
 
 const NAV_ITEMS = [
@@ -29,27 +28,13 @@ const MOBILE_NAV = [
   { href: '/allocated', label: 'Allocated', icon: '📤' },
 ]
 
-export default function Nav() {
+type Props = { profile: UserProfile | null }
+
+export default function Nav({ profile }: Props) {
   const pathname = usePathname()
   const router = useRouter()
-  const [profile, setProfile] = useState<UserProfile | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
-
-  useEffect(() => {
-    async function loadProfile() {
-      const supabase = createClient()
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) return
-      try {
-        const p = await api.me(session.access_token)
-        setProfile(p)
-      } catch {
-        // Profile not yet linked — show minimal nav
-      }
-    }
-    loadProfile()
-  }, [])
 
   async function signOut() {
     setSigningOut(true)
