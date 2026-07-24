@@ -3,7 +3,7 @@
 > **Internal Operations Platform · Master Build Document**
 > Voice-first capture for tasks, meeting outcomes, and ideas across **Ecoste** (WPC building products), **Lamora** (door solutions), and **Metamask** (metal facade systems).
 >
-> **Owner:** Ankur Hora — Founder's Office
+> **Owner:** pankaj_ecoste (ai.support@ecoste.in) — Founder's Office
 > **Status:** Prototype **approved by the CEO**. This is now a **production build**, not an experiment.
 > **Target scale:** **200–300 employees** across Ecoste, Lamora, and Metamask (200 at launch, up to ~300).
 > **Infrastructure:** Production Supabase project owned by **ai.support@ecoste.in** (service-role key in backend/Railway env only; frontend uses the anon key).
@@ -12,6 +12,56 @@
 > **This file is the single source of truth.** When in doubt, follow this document over memory or assumption.
 >
 > **Production note:** CEO approval greenlights building for real — it does **not** cancel the phased discipline. The Phase 1C hard gate (prove extraction accuracy on a small supervised group) still stands, precisely *because* 200–300 people will depend on this. "Production for 200–300" = seeing the build through **Phase 2** (org-wide rollout), not shipping everything to everyone on day one. Two things are now hard prerequisites rather than nice-to-haves: (1) **database indexes** — added in migration `0013`, already in `run_all_migrations.sql`; and (2) **custom SMTP (Brevo)** — Supabase's built-in email will rate-limit long before 200 people can receive OTPs, so it must be wired up before broad onboarding.
+
+---
+
+## 0. North Star — what we actually want (LOCKED 2026-07-24)
+
+> This section is the top of the funnel. Every technical choice below serves the three objectives here. When a decision is unclear, come back to this section first.
+
+### The three objectives — fast, accurate, reliable
+
+The whole product exists to do one thing well: **turn spoken intent into a correct, trustworthy, instantly-available record.** That breaks into three objectives. Treat all three as required, not optional. **When two of them conflict, accuracy wins** — it is the foundation everything else is built on (see §18, "the single most important principle").
+
+**1. ACCURATE — capture exactly what was said, and route it to the right person.**
+- Transcription faithfully handles **Hinglish** (the org's real Hindi/English code-mix), not just clean Hindi or clean English.
+- Extraction returns the **right doer, a sensible description, the correct deadline** (including relative dates like "Friday" / "Monday tak"), and the **right report-to**.
+- Numeric targets: deadline parsed correctly **90%+**, doer matched **85%+** (see §16).
+- A human **always confirms before save**, so accuracy = good machine extraction **plus** a review screen that makes any mistake obvious and trivial to fix.
+- Same-name people are disambiguated by **company**; the system never silently routes to the wrong person.
+
+**2. RELIABLE — work every time, lose nothing, never leave the user stuck.**
+- The app is available when people need it and **never loses a recording** — audio is stored *before* processing begins.
+- Every recording ends in exactly one of two states: **a result, or a clear, actionable error — never an infinite spinner.** (This exact bug was found and fixed once; it must never regress.)
+- Provider failures (AssemblyAI or Claude down, bad JSON, upload timeout) are handled gracefully: the user can re-record or edit the raw transcript; the pipeline **retries where sensible and is idempotent** (processing the same job twice never creates duplicates or corrupts data).
+- **Data integrity is absolute:** RLS keeps every company's data separate; the leadership dashboard is the one deliberate, scoped exception; **no cross-company leak, ever.**
+
+**3. FAST — feel quick on a mid-range phone over mobile data.**
+- Screens load quickly on a mid-range Android over 4G — target first meaningful content in **~2–3s**.
+- The recording flow **never freezes the screen**: upload returns immediately, the AI works in the background, and the user sees a clear "Analysing…" state.
+- A 2-minute clip returns its structured result in **under ~30s** (bounded mainly by AssemblyAI + Claude, not by our own overhead).
+- Lists and dashboards feel instant — **server-side pagination + Supabase Realtime, never polling.**
+- No artificial waits, no blocking calls, no spinner with nothing behind it.
+
+### Architecture decision (LOCKED)
+
+**Target end-state: the entire application runs fully serverless on Vercel + Supabase — no always-on server.**
+
+- **Frontend:** Next.js on **Vercel** (static/SSR served from a global CDN).
+- **Data, Auth, Storage, Realtime:** **Supabase** (Postgres + RLS + Auth + Realtime + Storage).
+- **Backend logic:** Vercel serverless functions and/or **Supabase Edge Functions** + Postgres (RLS, views, RPC). As much CRUD as is safe moves directly onto Supabase with RLS, retiring hand-written backend endpoints.
+- **The recording pipeline is redesigned from "poll-and-wait" to "submit + webhook":** a short function submits the audio to AssemblyAI with a **webhook URL** and returns immediately; AssemblyAI does the long transcription **on its own servers**; when finished it **calls our webhook** (a serverless function), which runs Claude and writes the result; the frontend picks it up via **Supabase Realtime**. Nothing on our side stays open waiting.
+
+**Why serverless is the target:** it matches the workload, scales to zero, costs nothing at idle (no always-on server bill), has fewer moving parts, and — built on webhooks — is **faster and more reliable, not less**. It serves all three objectives directly.
+
+**Interim stack (the pilot running now):** a FastAPI backend on **Render (free tier)** + Next.js on **Vercel** + **Supabase**. Render is a **temporary bridge** so 2–3 testers can use the app immediately without waiting on the serverless rewrite. **It is not the final architecture.** Its only real weakness — a ~50s cold start after idle — is acceptable for a small pilot.
+
+**Sequencing (do not reorder):**
+1. **Ship & run the pilot on the interim stack** (Render + Vercel + Supabase) — get real recordings from real people.
+2. **Prove accuracy** on those real recordings (the Phase 1C hard gate).
+3. **Then** perform the serverless migration as a **deliberate, tested refactor** — rewrite the pipeline to submit+webhook, push CRUD into Supabase with RLS, and remove the always-on backend.
+
+We do **not** destabilise a working pilot to chase architecture. Any earlier text in this document that assumes an always-on server (Railway, "two services", the service-role key living in a server env) is **superseded by this decision** and is being migrated away from — those references are kept only to describe the interim, not the target.
 
 ---
 
@@ -30,6 +80,7 @@ Work top to bottom. Each phase assumes the previous one passed its gate.
 
 ## Table of contents
 
+0. [North Star — objectives & architecture (LOCKED)](#0-north-star--what-we-actually-want-locked-2026-07-24)
 1. [Product summary & core principles](#1-product-summary--core-principles)
 2. [What changed from spec v2.1 (the additions)](#2-what-changed-from-spec-v21-the-additions)
 3. [The core loop](#3-the-core-loop)
@@ -58,7 +109,7 @@ MeetUp is an **internal-only** platform built around three actions: **delegate a
 
 It is **not** a project-management tool. It is a **voice-first capture layer** that turns spoken intent into a structured, searchable, accountable record — for *every* employee, not just leadership.
 
-**The build reuses the proven CoachUp pipeline pattern** (audio → AssemblyAI transcript → Claude extraction), ported into a fresh MeetUp codebase. The new work is the data model, the three recording flows, the task/scoring views, and the phased rollout.
+**The pipeline follows the proven pattern** (audio → AssemblyAI transcript → LLM extraction), built as clean modules from scratch in a fresh MeetUp codebase (not cloned from CoachUp). The new work is the data model, the three recording flows, the task/scoring views, and the phased rollout.
 
 ### Non-negotiable principles (apply to every line of code)
 
@@ -145,7 +196,7 @@ For Phase 1's small pilot, a **Supabase-table-as-queue** is enough — replaceab
 
 | Home item | Type | What it does |
 |-----------|------|--------------|
-| **Org Performance** *(new, gated)* | View | Scores of all employees across all three companies; search by name/email |
+| **Org Performance** *(new, gated)* | View | Full leadership dashboard (§7.5): org-wide task register (assigner/doer/deadline/assigned-date/status) with assigned-date & deadline range filters + "today"/"assigned today" quick filters; a **Today snapshot** (assigned / completed / pending); and a **colour-banded scoring analysis** (🟢≥95% · 🟡90–95% · 🔴<90%, click a band → staff list, search by email). All across three companies. |
 
 ### Screen states to build (from spec — desktop + phone)
 
@@ -157,7 +208,7 @@ For Phase 1's small pilot, a **Supabase-table-as-queue** is enough — replaceab
 - **Meetings**: list of past meetings, MoM summary, count of tasks generated, recorded-by; tap to read full minutes.
 - **Idea feed**: universal across all companies; filter by company + date; keyword search.
 - **My Performance** *(new)*: two metric cards + a list of the user's own completed/overdue tasks; extension history.
-- **Org Performance** *(new, leadership)*: searchable table of all employees with on-time %, overdue count, task volume, company.
+- **Org Performance** *(new, leadership)*: the full dashboard in §7.5 — (a) org-wide **task register** with columns assigner / doer / deadline / assigned-date / status, assigned-date & deadline **range filters**, and "deadline today" / "assigned today" quick filters; (b) a **Today snapshot** of assigned / completed / pending counts; (c) a **colour-banded scoring analysis** (🟢 top ≥95% · 🟡 average 90–95% · 🔴 <90%) where clicking a band reveals the staff in it, with **email search** throughout.
 
 > **Name-matching:** Doer and Report To dropdowns are pre-loaded from `users`, showing **Name + Company**. Claude's best guess is pre-selected but correctable. The Company column disambiguates two people with the same name across companies. The system never silently picks the wrong person.
 
@@ -326,7 +377,8 @@ The protection does **not** come from "we created only one CEO designation row."
 
 - A searchable table: employee name, company, on-time %, overdue count, task volume.
 - Search by **name** and **email**.
-- **Scores + counts only** — no raw task-text drill-down for now (a privacy line worth holding for the pilot). Full drill-down can be a deliberate Phase 2 decision if wanted.
+- The minimal **Phase 1C pilot** dashboard ships this (scores + counts + search) to clear the hard gate.
+- **The full founder-confirmed leadership dashboard is specified in §7.5** — an org-wide task register with date filters, a "today" snapshot, and a colour-banded scoring analysis. §7.5 **supersedes** the earlier "scores + counts only" limitation.
 
 ### 7.4 Implementation
 
@@ -335,6 +387,50 @@ The protection does **not** come from "we created only one CEO designation row."
 - The Org Performance home item is conditionally rendered on the frontend **and** protected by RLS on the backend (never UI-only).
 
 > **Phase note:** the spec parked "designation-tier feature gating" in Phase 2. We pull a **minimal** version forward to **Phase 1C** — just the leadership tier + the scoring dashboard. Broader tier-gating (multiple tiers, more gated features) stays in Phase 2.
+
+### 7.5 Leadership (CEO) dashboard — full functional spec (founder requirements, 2026-07-24)
+
+The founder confirmed the leadership dashboard must go **beyond scores-and-counts**. It has three parts. Every read here crosses company boundaries, so **all of it sits behind the one deliberate RLS exception** — gated on the server-verified `capability_tier = 'leadership'`, never UI-only.
+
+**A. Org-wide task register — leadership can always view *every* task, all companies, any status.**
+Each task row shows:
+- **Assigner** — who delegated it.
+- **Doer / assignee** — who is responsible.
+- **Deadline.**
+- **Assigned date** — the task's `created_at`.
+- **Status** — pending / completed / overdue.
+- **Task description is NOT shown** to leadership — metadata only (see privacy decision below).
+
+Filters on the register:
+- **Assigned-date range** — from date A to date B (filters on `created_at`).
+- **Deadline range** — from date A to date B (filters on `deadline`).
+- **Predefined quick filters:**
+  - **Deadline = today** — every task due today.
+  - **Assigned = today** — every task created today.
+- **Search by email** — jump to one staff member's tasks.
+
+**B. "Today" snapshot — one simple, glanceable visual for the current day, org-wide.**
+Three headline tiles (today only):
+- **Assigned today** — tasks created today across the organization.
+- **Completed today** — tasks marked complete today.
+- **Pending now** — tasks currently open/pending in the organization.
+
+**C. Scoring analysis dashboard — colour-banded performers.**
+Employees are grouped by their **on-time completion score** into three colour bands:
+- 🟢 **Green — Top performers:** score **≥ 95%**.
+- 🟡 **Yellow — Average performers:** score **≥ 90% and < 95%**.
+- 🔴 **Red — Needs attention:** score **< 90%**.
+
+Interaction:
+- The CEO sees the three bands (with a count of staff in each).
+- **Clicking a colour** expands the **list of staff in that band** — each showing name + email + score.
+- **Search by email** to find a specific person.
+
+> **Band boundary rule:** bands are defined with **no gaps** — Green is 95% and above, Yellow is 90% up to (but not including) 95%, Red is below 90%. The exact cut-offs (95 / 90) are single constants and trivial to change if you later want different thresholds. "Score" here = the **on-time completion rate** (§6.1), the primary performance metric.
+
+> **Privacy decision (LOCKED 2026-07-24):** the leadership task register shows **metadata only — assigner, doer, deadline, assigned date, status.** The **task description text is deliberately hidden** from leadership; the register is for accountability (who owes what, by when, done or not), not for reading the content of every task. This still **supersedes** the older "scores + counts only, no register at all" stance in §7.3 (leadership now gets the full metadata register + filters), but stops short of exposing task content.
+
+> **Phase note:** the minimal Phase 1C dashboard (scores + counts + search, §7.3) still ships first to clear the hard gate. This §7.5 spec is the **target** leadership dashboard, built as capacity allows on the same RLS gate.
 
 ---
 
@@ -346,10 +442,11 @@ Each choice is documented so it isn't accidentally reversed mid-build.
 |-------|-----------|-------------------------------|
 | Backend | **FastAPI (Python)** | Async-native (the pipeline waits on AssemblyAI + Claude). AssemblyAI / Anthropic / Google SDKs are first-class in Python. Auto API docs. Not Flask (no native async); not Django (too heavy). |
 | Frontend | **Next.js (React) + Tailwind** | SSR → fast first load on mid-range Android. One codebase, mobile + desktop. Not a pure SPA (blank screen on slow first load). |
-| Database | **Supabase (Postgres)** | RLS enforced in Postgres itself. Built-in Auth (email OTP). Realtime powers the live dashboard with no custom WebSockets. Separate project from CoachUp. |
+| Database | **Supabase (Postgres)** | RLS enforced in Postgres itself. Built-in Auth (email OTP). Realtime powers the live dashboard with no custom WebSockets. Dedicated project owned by ai.support@ecoste.in. |
 | Transcription | **AssemblyAI** | Best-in-class Hinglish accuracy — the org's actual language mix. Speaker diarization helps meetings. Proven in CoachUp. Not Whisper (weaker Hinglish); not Google STT (more complex). |
-| AI extraction | **Claude API** | Reliable structured-JSON extraction from messy conversational speech. Three system prompts, one client. Proven in CoachUp. |
-| Hosting | **Railway** | Auto-deploys from GitHub on push. Native env-var management — secrets never touch the repo. Hosts both Python + Node services. |
+| AI extraction | **Claude API (only)** | Reliable structured-JSON extraction from messy conversational speech. Three system prompts, one client. **OpenAI is not used — no OpenAI key anywhere in the stack.** |
+| Hosting (target) | **Vercel + Supabase, fully serverless** | See §0. Frontend on Vercel; all backend logic as Vercel/Supabase serverless functions + Postgres RLS; recording pipeline on a submit-plus-webhook flow. No always-on server. Scales to zero, cheaper, and — via webhooks — faster and more reliable. |
+| Hosting (interim, pilot) | **Render (free) for the FastAPI backend + Vercel for the frontend** | A temporary bridge to get 2–3 testers live *now* without the serverless rewrite. Render gives an always-on process the current poll-and-wait pipeline needs; ~50s cold-start after idle is fine for a small pilot. **Railway was the original plan and is dropped** — Render's free tier avoids a new paid platform. |
 | File storage | **Supabase Storage** | Same RLS model as the DB. Signed URLs with expiry for audio — never public links. No separate object store in Phase 1. |
 
 ### Deferred to later phases — **do not build in Phase 1**
@@ -365,7 +462,7 @@ Each choice is documented so it isn't accidentally reversed mid-build.
 
 ## 9. Repository & architecture
 
-**One GitHub repo, two Railway services.** Supabase migrations versioned in the same repo.
+**One GitHub repo.** Supabase migrations versioned in the same repo. **Interim deployment:** the `backend/` FastAPI service runs on **Render (free)**; the `frontend/` Next.js app runs on **Vercel**. **Target deployment (§0):** frontend on Vercel, all backend logic as serverless functions + Supabase (RLS/views/RPC) — the standalone FastAPI service goes away.
 
 ```
 meetup/
@@ -380,7 +477,7 @@ meetup/
 │   │   ├── ideas.py          # idea save + retrieval
 │   │   └── performance.py    # NEW: My Performance + Org Performance (leadership)
 │   ├── services/
-│   │   ├── assemblyai.py     # transcription (ported from CoachUp)
+│   │   ├── assemblyai.py     # transcription (AssemblyAI Hinglish)
 │   │   ├── claude.py         # 3 extraction prompts
 │   │   └── supabase.py       # db client (service role)
 │   ├── models/               # Pydantic schemas
@@ -411,7 +508,7 @@ meetup/
     └── migrations/           # all schema SQL, versioned
 ```
 
-**Key separation:** the Supabase **service-role key lives only in the backend (Railway env vars)** — it bypasses RLS. The **frontend uses the anon key only.**
+**Key separation:** the Supabase **service-role key lives only in the backend server env (currently Render env vars)** — it bypasses RLS. The **frontend uses the anon key only.** In the serverless target (§0), the service-role key lives only in the serverless functions/Edge Functions that genuinely need to bypass RLS; everything else relies on the anon key + RLS.
 
 ---
 
@@ -421,8 +518,8 @@ meetup/
 
 ### Build instructions
 
-1. **Clone CoachUp; port (don't copy-paste) the pipeline.** Extract the recording UI, AssemblyAI client, and Claude call into clean reusable modules in the fresh MeetUp repo.
-2. **Run all 7 table migrations** in Supabase: `companies`, `designations`, `users`, `tasks`, `task_extensions`, `meetings`, `ideas`. Include the additions: `tasks.completed_at`, `tasks.original_deadline`, the full `task_extensions` table, and `designations.capability_tier`.
+1. **Build the pipeline as clean modules from scratch** (not cloned from CoachUp): the recording UI, AssemblyAI client, and LLM extraction call as reusable modules in the MeetUp repo.
+2. **Run the consolidated schema** in the new Supabase project's SQL Editor: paste and run `supabase/run_all_migrations.sql` in one shot. It creates all **8 tables** (`companies`, `designations`, `users`, `tasks`, `task_extensions`, `meetings`, `ideas`, plus the `recording_jobs` async-queue table), the `user_performance` view, the `updated_at` trigger, RLS on every table, the performance indexes, the private `audio` storage bucket, and seeds companies + designations. Includes the additions: `tasks.completed_at`, `tasks.original_deadline`, the full `task_extensions` table, and `designations.capability_tier`.
 3. **Enable RLS on every table immediately**, before any data is written. Add the `updated_at` Postgres trigger on `tasks`.
 4. **Create the `user_performance` view** (on-time %, overdue count, totals, avg days-to-complete) with RLS: own-row for standard, all-rows for leadership tier.
 5. **Scaffold FastAPI + Next.js on Railway.** Wire GitHub CI so lint + build pass on every push.
@@ -617,10 +714,16 @@ The developer does not need to ask about any of these.
 | When does WhatsApp approval start? | Phase 1C (Week 6) — Meta approval takes 3–7 days. |
 | Max recording length? | ~5 min for task delegation, ~30 min for meetings. UI enforces the limit. |
 | What if extraction fails? | Clear error; user can re-record or edit a raw transcript manually. Error states built in Phase 1C. |
+| **Which LLM runs extraction?** | **Claude API only. OpenAI is not used — no OpenAI key anywhere in the stack (backend, env, or Railway).** |
 | **How is a doer scored?** | **Derived live from `tasks` (never stored). Two metrics: on-time completion % + current overdue count.** |
 | **What protects a doer's score from a real bottleneck?** | **An approved deadline extension. The score judges against the current deadline; an approved extension moves it, so no penalty. Approval (not the claim) is what protects.** |
-| **Who can see all employees' scores?** | **Only `capability_tier = 'leadership'`. Searchable by name/email. Scores + counts only in Phase 1.** |
+| **Who can see all employees' scores?** | **Only `capability_tier = 'leadership'`. Searchable by name/email.** |
+| **What does the leadership (CEO) dashboard show?** | **(§7.5) (a) Org-wide task register — every task, all companies, any status — with assigner, doer, deadline, assigned-date, status; filter by assigned-date range and deadline range; quick filters "deadline today" / "assigned today"; email search. (b) A "today" snapshot: assigned / completed / pending counts. (c) Colour-banded scoring: 🟢 ≥95%, 🟡 90–<95%, 🔴 <90% — click a band to list the staff in it, search by email. This supersedes the earlier "scores + counts only" limit.** |
 | **How is leadership access granted?** | **By seeding/admin only — never self-selected. Signup dropdown excludes leadership tiers; backend rejects self-assignment; RLS reads the verified stored tier. Self-claiming CEO is structurally impossible.** |
+| **What are the product's non-negotiable objectives?** | **Accurate, reliable, fast — in that priority when they conflict. Defined concretely in §0.** |
+| **What is the target hosting architecture?** | **Fully serverless on Vercel + Supabase — no always-on server. Recording pipeline uses submit-plus-webhook; CRUD moves into Supabase (RLS/views/RPC). See §0.** |
+| **What is the interim hosting for the pilot?** | **FastAPI backend on Render (free) + Next.js on Vercel + Supabase. A temporary bridge, not the final architecture. Railway is dropped.** |
+| **When do we do the serverless migration?** | **After the pilot proves accuracy (Phase 1C hard gate). Never destabilise a working pilot to chase architecture.** |
 
 ---
 
@@ -641,8 +744,8 @@ Read before writing any auth or data code.
 ### Immediate next steps (in order)
 1. Read this document fully — especially Locked Decisions (§17) and the access-control model (§7).
 2. Get Supabase credentials (secure channel — never email or WhatsApp).
-3. Clone CoachUp; extract the pipeline as clean modules.
-4. Run the 7 schema migrations + `updated_at` trigger + `user_performance` view; enable RLS immediately.
+3. Build the pipeline as clean modules from scratch (not cloned from CoachUp).
+4. Run `supabase/run_all_migrations.sql` (all 8 tables + `updated_at` trigger + `user_performance` view + indexes + `audio` bucket + seed); RLS is enabled inside the script.
 5. Scaffold app + auth (Next.js + FastAPI on Railway, email-OTP, anon key in frontend).
 6. Build the three flows (Task Delegation → Meeting Recording → Idea, in that order). Test each with real Hinglish audio.
 7. Build views, dashboard, scoring, and the extension flow. Mobile-responsive from day one.
