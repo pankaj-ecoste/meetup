@@ -59,3 +59,20 @@ export async function requireUser(req: Request): Promise<UserProfile> {
     is_active: data.is_active,
   }
 }
+
+/**
+ * Verify the Supabase JWT on the request and return the raw auth identity —
+ * WITHOUT requiring a linked `users` row. Used only by the claim-finish step,
+ * where the whole point of the call is to link a profile that isn't linked
+ * yet (requireUser would 404 there).
+ */
+export async function requireAuthIdentity(
+  req: Request,
+): Promise<{ authId: string; email: string }> {
+  const token = bearerToken(req)
+  const { data, error } = await supabaseAdmin().auth.getUser(token)
+  if (error || !data?.user?.email) {
+    throw new HttpError(401, 'Invalid or expired token')
+  }
+  return { authId: data.user.id, email: data.user.email }
+}

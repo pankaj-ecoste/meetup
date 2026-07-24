@@ -4,57 +4,37 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
-type Step = 'email' | 'otp'
-
 export default function LoginPage() {
   const router = useRouter()
-  const [step, setStep] = useState<Step>('email')
 
-  // Handle magic link redirect — if user arrives with a session already, go to dashboard
+  // If a session already exists (e.g. arriving via a stale tab), go straight in.
   useEffect(() => {
     const supabase = createClient()
-    supabase.auth.onAuthStateChange((event, session) => {
+    supabase.auth.onAuthStateChange((_event, session) => {
       if (session) {
         router.push('/')
         router.refresh()
       }
     })
   }, [router])
+
   const [email, setEmail] = useState('')
-  const [otp, setOtp] = useState('')
+  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  async function sendOtp() {
-    if (!email.trim()) return
+  async function signIn() {
+    if (!email.trim() || !password) return
     setError('')
     setLoading(true)
     const supabase = createClient()
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
+      password,
     })
     setLoading(false)
     if (error) {
-      const msg = error.message && error.message !== '{}' ? error.message : 'Failed to send OTP — please check your email and try again.'
-      setError(msg)
-    } else {
-      setStep('otp')
-    }
-  }
-
-  async function verifyOtp() {
-    if (!otp.trim()) return
-    setError('')
-    setLoading(true)
-    const supabase = createClient()
-    const { error } = await supabase.auth.verifyOtp({
-      email: email.trim(),
-      token: otp.trim(),
-      type: 'email',
-    })
-    setLoading(false)
-    if (error) {
-      setError(error.message || 'Invalid or expired code. Try again.')
+      setError('Incorrect email or password.')
     } else {
       router.push('/')
       router.refresh()
@@ -70,71 +50,47 @@ export default function LoginPage() {
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-          {step === 'email' ? (
-            <>
-              <h2 className="text-lg font-semibold mb-1">Sign in</h2>
-              <p className="text-sm text-gray-500 mb-5">
-                Enter your email and we&apos;ll send you a sign-in code.
-              </p>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Work email
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && sendOtp()}
-                placeholder="you@company.com"
-                autoFocus
-                className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-              />
-              {error && <p className="text-red-600 text-sm mt-2">{error}</p>}
-              <button
-                onClick={sendOtp}
-                disabled={!email.trim() || loading}
-                className="w-full mt-4 bg-indigo-600 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {loading ? 'Sending…' : 'Send OTP'}
-              </button>
-            </>
-          ) : (
-            <>
-              <h2 className="text-lg font-semibold mb-1">Enter your code</h2>
-              <p className="text-sm text-gray-500 mb-5">
-                We sent a sign-in code to{' '}
-                <span className="font-medium text-gray-700">{email}</span>.
-              </p>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Sign-in code
-              </label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={8}
-                value={otp}
-                onChange={e => setOtp(e.target.value.replace(/\D/g, ''))}
-                onKeyDown={e => e.key === 'Enter' && verifyOtp()}
-                placeholder="12345678"
-                autoFocus
-                className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm text-center tracking-widest text-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-              />
-              {error && <p className="text-red-600 text-sm mt-2">{error}</p>}
-              <button
-                onClick={verifyOtp}
-                disabled={otp.length < 6 || loading}
-                className="w-full mt-4 bg-indigo-600 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {loading ? 'Verifying…' : 'Verify & Sign in'}
-              </button>
-              <button
-                onClick={() => { setStep('email'); setError(''); setOtp('') }}
-                className="w-full mt-3 text-sm text-gray-500 hover:text-gray-700 py-1"
-              >
-                Use a different email
-              </button>
-            </>
-          )}
+          <h2 className="text-lg font-semibold mb-1">Sign in</h2>
+          <p className="text-sm text-gray-500 mb-5">Enter your email and password.</p>
+
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Work email</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && signIn()}
+            placeholder="you@company.com"
+            autoFocus
+            className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent mb-3"
+          />
+
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && signIn()}
+            placeholder="Your password"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+          />
+
+          {error && <p className="text-red-600 text-sm mt-2">{error}</p>}
+
+          <button
+            onClick={signIn}
+            disabled={!email.trim() || !password || loading}
+            className="w-full mt-4 bg-indigo-600 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {loading ? 'Signing in…' : 'Sign in'}
+          </button>
         </div>
+
+        <p className="text-center text-sm text-gray-500 mt-6">
+          First time here or forgot your password?{' '}
+          <a href="/claim" className="text-indigo-600 hover:text-indigo-700 font-medium">
+            Set up your account
+          </a>
+        </p>
 
         <p className="text-center text-xs text-gray-400 mt-6">
           Ecoste · Lamora · Metamask

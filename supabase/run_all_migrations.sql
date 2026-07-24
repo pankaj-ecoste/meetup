@@ -365,6 +365,10 @@ create index if not exists idx_jobs_status            on recording_jobs (status)
 alter table recording_jobs add column if not exists transcript_id text;
 create index if not exists idx_jobs_transcript_id     on recording_jobs (transcript_id);
 
+-- ── 0015: one-time claim + password login (replaces OTP-every-login) ────
+alter table users add column if not exists password_set boolean not null default false;
+create index if not exists idx_users_claimable        on users (is_active, password_set);
+
 create index if not exists idx_users_company          on users (company_id);
 create index if not exists idx_users_designation      on users (designation_id);
 create index if not exists idx_designations_company   on designations (company_id);
