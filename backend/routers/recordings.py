@@ -29,6 +29,14 @@ def _run_pipeline(job_id: str, audio_url: str, job_type: str) -> None:
         _update("transcribing")
         transcript = transcribe(audio_url)
 
+        if not transcript or not transcript.strip():
+            _update(
+                "error",
+                transcript=transcript or "",
+                error_msg="No speech detected in the recording. Please record again and speak clearly for a few seconds.",
+            )
+            return
+
         _update("extracting", transcript=transcript)
 
         if job_type == "task_delegation":

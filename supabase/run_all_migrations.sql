@@ -361,6 +361,10 @@ create index if not exists idx_ideas_tags_gin         on ideas using gin (tags);
 create index if not exists idx_jobs_user              on recording_jobs (user_id);
 create index if not exists idx_jobs_status            on recording_jobs (status);
 
+-- ── 0014: submit+webhook pipeline — correlate AssemblyAI callback to job ──
+alter table recording_jobs add column if not exists transcript_id text;
+create index if not exists idx_jobs_transcript_id     on recording_jobs (transcript_id);
+
 create index if not exists idx_users_company          on users (company_id);
 create index if not exists idx_users_designation      on users (designation_id);
 create index if not exists idx_designations_company   on designations (company_id);
@@ -389,15 +393,15 @@ insert into designations (id, name, capability_tier, company_id) values
 on conflict do nothing;
 
 -- ── Founder user row ─────────────────────────────────────────
--- Run this AFTER Ankur logs in via OTP for the first time.
+-- Run this AFTER the founder logs in via OTP for the first time.
 -- Replace <FOUNDER_AUTH_UID> with the UUID from Authentication → Users in Supabase dashboard.
 --
 -- insert into users (id, auth_id, name, email, company_id, designation_id)
 -- values (
 --   gen_random_uuid(),
 --   '<FOUNDER_AUTH_UID>',
---   'Ankur Hora',
---   'ankur@yourdomain.com',
+--   'pankaj_ecoste',
+--   'ai.support@ecoste.in',
 --   '00000000-0000-0000-0000-000000000001',
 --   '00000000-0000-0000-0002-000000000001'
 -- );

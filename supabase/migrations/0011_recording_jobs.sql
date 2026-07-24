@@ -33,3 +33,10 @@ create policy "jobs_insert_owner"
   on recording_jobs for insert
   to authenticated
   with check (user_id = (select id from users where auth_id = auth.uid()));
+
+-- Enable Realtime: the frontend subscribes to status changes on this table.
+-- Without adding it to the supabase_realtime publication, UPDATE events are
+-- never broadcast and the UI spinner hangs forever. REPLICA IDENTITY FULL is
+-- required so RLS is applied correctly to UPDATE events under Realtime.
+alter table recording_jobs replica identity full;
+alter publication supabase_realtime add table recording_jobs;

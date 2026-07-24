@@ -26,7 +26,7 @@
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 0.1 | Pipeline modules written from scratch (no CoachUp clone) | ✅ | `services/assemblyai.py`, `services/extraction.py` (OpenAI now; swap to Anthropic later) |
+| 0.1 | Pipeline modules written from scratch (no CoachUp clone) | ✅ | `services/assemblyai.py`, `services/extraction.py` — extraction.py now on **Claude API** (`claude-opus-4-8`); OpenAI removed (Tech Debt #4 resolved) |
 | 0.2 | Migration: `companies` table | ✅ | `0001_companies.sql` — RLS included |
 | 0.3 | Migration: `designations` table (with `capability_tier`) | ✅ | `0002_designations.sql` |
 | 0.4 | Migration: `users` table | ✅ | `0003_users.sql` — RLS blocks self-elevation to leadership tier |
@@ -223,7 +223,7 @@ routers/ideas.py                ← GET /ideas, POST /ideas
 routers/performance.py          ← GET /performance/me, GET /performance/org (leadership only), GET /performance/extensions/my
 services/supabase.py            ← Supabase service-role client (singleton)
 services/assemblyai.py          ← transcribe() — AssemblyAI Hinglish model
-services/extraction.py          ← extract_task/meeting/idea() — OpenAI gpt-4o (swap file for Claude later)
+services/extraction.py          ← extract_task/meeting/idea() — Claude API (anthropic SDK, claude-opus-4-8)
 models/schemas.py               ← all Pydantic request/response models
 railway.toml                    ← Railway deployment config
 ```
@@ -304,7 +304,7 @@ backend/.env                       ← Recreated after accidental deletion; corr
 - Frontend: `npm run dev` from `meetup/frontend/`
 - Supabase: personal account (iuvpvoojsrgjseoxtbtz) — **to be replaced**
 - Email OTP: Supabase built-in (custom SMTP disabled for now)
-- User seeded: pankaj.exe9021@gmail.com with leadership designation
+- User seeded: founder account (ai.support@ecoste.in) with leadership designation
 
 ---
 
@@ -314,7 +314,7 @@ backend/.env                       ← Recreated after accidental deletion; corr
 
 | # | Task | Status |
 |---|------|--------|
-| A.1 | Create new Supabase project at supabase.com logged in with `pankaj@bcoachindia.com` | ⏳ |
+| A.1 | Create new Supabase project at supabase.com logged in with `ai.support@ecoste.in` | ⏳ |
 | A.2 | Copy new Project URL + anon key + service role key from new project Settings → API | ⏳ |
 | A.3 | Run all migrations in new project SQL editor (in order, one by one): `0001` → `0011` | ⏳ |
 | A.4 | Run `supabase/seed.sql` in new project SQL editor | ⏳ |
@@ -330,13 +330,13 @@ backend/.env                       ← Recreated after accidental deletion; corr
 
 | # | Task | Status |
 |---|------|--------|
-| B.1 | Create Brevo account with `pankaj@bcoachindia.com` | ⏳ |
-| B.2 | In Brevo → Senders, Domains, IPs → Domains → Add `bcoachindia.com` | ⏳ |
+| B.1 | Create Brevo account with `ai.support@ecoste.in` | ⏳ |
+| B.2 | In Brevo → Senders, Domains, IPs → Domains → Add `ecoste.in` | ⏳ |
 | B.3 | Add the 3 DNS records Brevo provides (SPF, DKIM, DMARC) to domain registrar | ⏳ |
 | B.4 | Verify domain in Brevo (click Verify after DNS propagates — can take up to 24h) | ⏳ |
-| B.5 | Add sender: `noreply@bcoachindia.com` (or `meetup@bcoachindia.com`) | ⏳ |
+| B.5 | Add sender: `noreply@ecoste.in` (or `meetup@ecoste.in`) | ⏳ |
 | B.6 | In Brevo → SMTP & API → copy the SMTP Key (starts with `xsmtp-...`) | ⏳ |
-| B.7 | In new Supabase → Authentication → SMTP Settings → enable custom SMTP: host `smtp-relay.brevo.com`, port `587`, username = Brevo login email, password = SMTP Key from B.6, sender = `noreply@bcoachindia.com` | ⏳ |
+| B.7 | In new Supabase → Authentication → SMTP Settings → enable custom SMTP: host `smtp-relay.brevo.com`, port `587`, username = Brevo login email, password = SMTP Key from B.6, sender = `noreply@ecoste.in` | ⏳ |
 | B.8 | Test OTP email with custom SMTP live | ⏳ |
 
 ---
@@ -347,6 +347,11 @@ backend/.env                       ← Recreated after accidental deletion; corr
 
 | # | Issue | Phase found | Priority | Status |
 |---|-------|-------------|----------|--------|
-| 1 | Old Supabase project (iuvpvoojsrgjseoxtbtz) under personal Gmail — to be replaced by Step A | Setup | High | ⏳ Planned |
+| 1 | Old Supabase project (iuvpvoojsrgjseoxtbtz) under personal Gmail — to be replaced by Step A | Setup | High | ✅ Done — new project `nydmbszpzygkqutoyzkn` live under ai.support@ecoste.in; all 8 tables + seeds verified via REST |
+| 5 | Extraction can't resolve relative deadlines ("Friday", "Monday tak") — prompt has no notion of "today", so deadlines come back as wrong-year dates or null. Pre-existing (was true on OpenAI too). | Phase 0 (found during Claude smoke test) | High | ✅ Done — `_now_context()` in extraction.py injects current IST datetime (fixed UTC+5:30, no tzdata dep) into task+meeting prompts. Verified: Friday→2026-07-24, Monday tak→2026-07-27, Wednesday tak→2026-07-22. |
+| 6 | `service_role` key was pasted into a chat transcript during env setup — rotate after pilot (Supabase → Settings → API → roll) and re-write `backend/.env`. | Setup | Medium | ⏳ Planned |
+| 7 | ~~All seeded designations are standard-tier~~ — **FALSE ALARM.** A `Founder`/`leadership` designation (`…0002-…0001`) was already in the seed; my initial `limit=4` sample just didn't include it. Founder `users` row is attached to it. | Setup | — | ✅ Resolved (no action) |
+| 8 | Custom SMTP (Brevo) not configured — Supabase default email is rate-limited/unreliable for OTP. Founder login uses admin-generated magic link (`generate_login_link.py` / seed script) to bypass the inbox. Set up Brevo SMTP before onboarding real employees. | Setup | Medium | ⏳ Planned (before pilot) |
 | 2 | Navigation between pages hits server auth check on every route — slight lag in dev | Phase 1B | Low | Acceptable in dev; faster on Railway |
 | 3 | GitHub CI (task 0.22) not wired — build passes locally but no automated checks on push | Phase 0 | Medium | ⏳ Deferred |
+| 4 | `services/extraction.py` uses OpenAI `gpt-4o`; decision locked to **Claude API only, no OpenAI**. Swap SDK client + call (prompts & return shapes unchanged), replace `openai` with `anthropic` in `requirements.txt`, and use `ANTHROPIC_API_KEY` (not `OPENAI_API_KEY`) in env. | Setup | High | ✅ Done — swapped to `anthropic` SDK, model `claude-opus-4-8`, system prompts + JSON shapes unchanged, `temperature` dropped (rejected on Opus 4.8), `max_tokens=4096` added, parses first text block. `requirements.txt` now `anthropic>=0.40.0`. |

@@ -47,6 +47,9 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    // Exclude /api/* — those are same-origin JSON route handlers that do their
+    // own auth (Bearer JWT via requireUser, or the AssemblyAI webhook secret),
+    // not cookie-session pages. The cookie-based redirect below is page-only.
+    '/((?!api|_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }

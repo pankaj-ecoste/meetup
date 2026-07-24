@@ -40,8 +40,8 @@ on conflict do nothing;
 -- values (
 --   gen_random_uuid(),
 --   '<REPLACE_WITH_FOUNDER_AUTH_UID>',
---   'Ankur Hora',
---   'ankur@example.com',          -- replace with real email
+--   'pankaj_ecoste',
+--   'ai.support@ecoste.in',       -- founder / leadership account
 --   '00000000-0000-0000-0000-000000000001',  -- Ecoste
 --   '00000000-0000-0000-0002-000000000001'   -- Founder (leadership tier)
 -- );

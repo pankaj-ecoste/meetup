@@ -1,4 +1,7 @@
-const BASE = process.env.NEXT_PUBLIC_BACKEND_URL
+// Same-origin: the API is now Next.js Route Handlers under /api (serverless
+// build §9.1). No NEXT_PUBLIC_BACKEND_URL, no CORS. Path strings below are
+// unprefixed (e.g. '/auth/me'), so BASE supplies the '/api' segment.
+const BASE = '/api'
 
 async function authFetch(path: string, token: string, options: RequestInit = {}) {
   const headers: Record<string, string> = {

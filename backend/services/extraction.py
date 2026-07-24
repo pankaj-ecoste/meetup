@@ -1,14 +1,32 @@
 import os
 import json
-from openai import OpenAI
+from datetime import datetime, timezone, timedelta
+from anthropic import Anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── When you get the Anthropic key, replace this file with the anthropic SDK ──
-# Only the client init + create call change; prompts and return shapes stay identical.
+# IST is a fixed UTC+5:30 (no DST), so a hardcoded offset needs no tz database.
+_IST = timezone(timedelta(hours=5, minutes=30))
 
-MODEL = "gpt-4o"
+
+def _now_context() -> str:
+    """Current-time context appended to deadline-bearing prompts so the model
+    can resolve relative deadlines ("Friday", "Monday tak", "kal", "shaam 5 baje")
+    to correct absolute dates."""
+    now = datetime.now(_IST).isoformat(timespec="seconds")
+    return (
+        f"\n\nCurrent date and time: {now} (Asia/Kolkata, IST). "
+        "Resolve every relative deadline (e.g. 'Friday', 'Monday tak', 'kal', "
+        "'parso', 'agle hafte', 'shaam 5 baje') to an absolute ISO 8601 datetime "
+        "relative to this current time. Never output a deadline in the past."
+    )
+
+# AI extraction is Claude-only (decision locked in plan.md §8/§17 — no OpenAI).
+# The three system prompts and JSON return shapes are unchanged from the
+# original; only the client init + create call moved from OpenAI to Anthropic.
+
+MODEL = "claude-opus-4-8"
 
 _TASK_SYSTEM = """You extract a single task delegation from a voice transcript.
 The speaker is delegating work to one person. Extract exactly:
@@ -38,29 +56,29 @@ Extract:
 Return ONLY valid JSON with keys "summary" and "tags". No markdown, no explanation."""
 
 
-def _client() -> OpenAI:
-    return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+def _client() -> Anthropic:
+    return Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 
 def _call(system: str, transcript: str) -> dict:
-    response = _client().chat.completions.create(
+    response = _client().messages.create(
         model=MODEL,
+        max_tokens=4096,
+        system=system,
         messages=[
-            {"role": "system", "content": system},
-            {"role": "user",   "content": transcript},
+            {"role": "user", "content": transcript},
         ],
-        response_format={"type": "json_object"},
-        temperature=0,
     )
-    return json.loads(response.choices[0].message.content)
+    text = next(block.text for block in response.content if block.type == "text")
+    return json.loads(text)
 
 
 def extract_task(transcript: str) -> dict:
-    return _call(_TASK_SYSTEM, transcript)
+    return _call(_TASK_SYSTEM + _now_context(), transcript)
 
 
 def extract_meeting(transcript: str) -> dict:
-    return _call(_MEETING_SYSTEM, transcript)
+    return _call(_MEETING_SYSTEM + _now_context(), transcript)
 
 
 def extract_idea(transcript: str) -> dict:
