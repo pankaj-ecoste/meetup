@@ -54,14 +54,14 @@ The whole product exists to do one thing well: **turn spoken intent into a corre
 
 **Why serverless is the target:** it matches the workload, scales to zero, costs nothing at idle (no always-on server bill), has fewer moving parts, and — built on webhooks — is **faster and more reliable, not less**. It serves all three objectives directly.
 
-**Interim stack (the pilot running now):** a FastAPI backend on **Render (free tier)** + Next.js on **Vercel** + **Supabase**. Render is a **temporary bridge** so 2–3 testers can use the app immediately without waiting on the serverless rewrite. **It is not the final architecture.** Its only real weakness — a ~50s cold start after idle — is acceptable for a small pilot.
+**No interim server (decision 2026-07-24).** A Render free-tier backend was briefly set up as a bridge, then **deleted before it ever carried pilot traffic.** We go **straight to the serverless target — Vercel + Supabase only.** The existing FastAPI backend in `backend/` is **superseded**: its logic is reimplemented as serverless functions (Next.js Route Handlers on Vercel and/or Supabase Edge Functions), and the recording pipeline is rebuilt on the **submit + webhook** pattern. No always-on server exists at any point.
 
 **Sequencing (do not reorder):**
-1. **Ship & run the pilot on the interim stack** (Render + Vercel + Supabase) — get real recordings from real people.
-2. **Prove accuracy** on those real recordings (the Phase 1C hard gate).
-3. **Then** perform the serverless migration as a **deliberate, tested refactor** — rewrite the pipeline to submit+webhook, push CRUD into Supabase with RLS, and remove the always-on backend.
+1. **Build the serverless app** on Vercel + Supabase — port the backend logic to serverless functions, rebuild the recording pipeline as submit+webhook, and push CRUD onto Supabase (RLS/views/RPC) where safe.
+2. **Deploy and run the 2–3 person pilot** on that serverless app — real recordings from real people.
+3. **Prove accuracy** on those real recordings (the Phase 1C hard gate) before any org-wide rollout.
 
-We do **not** destabilise a working pilot to chase architecture. Any earlier text in this document that assumes an always-on server (Railway, "two services", the service-role key living in a server env) is **superseded by this decision** and is being migrated away from — those references are kept only to describe the interim, not the target.
+Any earlier text in this document that assumes an always-on server (Railway/Render, "two services", the service-role key living in a persistent server env) is **superseded by this decision.** The service-role key now lives only in the serverless functions that genuinely must bypass RLS; everything else uses the anon key + RLS.
 
 ---
 
@@ -446,7 +446,7 @@ Each choice is documented so it isn't accidentally reversed mid-build.
 | Transcription | **AssemblyAI** | Best-in-class Hinglish accuracy — the org's actual language mix. Speaker diarization helps meetings. Proven in CoachUp. Not Whisper (weaker Hinglish); not Google STT (more complex). |
 | AI extraction | **Claude API (only)** | Reliable structured-JSON extraction from messy conversational speech. Three system prompts, one client. **OpenAI is not used — no OpenAI key anywhere in the stack.** |
 | Hosting (target) | **Vercel + Supabase, fully serverless** | See §0. Frontend on Vercel; all backend logic as Vercel/Supabase serverless functions + Postgres RLS; recording pipeline on a submit-plus-webhook flow. No always-on server. Scales to zero, cheaper, and — via webhooks — faster and more reliable. |
-| Hosting (interim, pilot) | **Render (free) for the FastAPI backend + Vercel for the frontend** | A temporary bridge to get 2–3 testers live *now* without the serverless rewrite. Render gives an always-on process the current poll-and-wait pipeline needs; ~50s cold-start after idle is fine for a small pilot. **Railway was the original plan and is dropped** — Render's free tier avoids a new paid platform. |
+| ~~Hosting (interim, pilot)~~ | ~~Render (free)~~ — **DROPPED 2026-07-24** | Railway, then a Render bridge, were both considered and **dropped before carrying any traffic.** There is **no interim always-on server** — we build directly on the serverless target above. |
 | File storage | **Supabase Storage** | Same RLS model as the DB. Signed URLs with expiry for audio — never public links. No separate object store in Phase 1. |
 
 ### Deferred to later phases — **do not build in Phase 1**
@@ -508,7 +508,69 @@ meetup/
     └── migrations/           # all schema SQL, versioned
 ```
 
-**Key separation:** the Supabase **service-role key lives only in the backend server env (currently Render env vars)** — it bypasses RLS. The **frontend uses the anon key only.** In the serverless target (§0), the service-role key lives only in the serverless functions/Edge Functions that genuinely need to bypass RLS; everything else relies on the anon key + RLS.
+**Key separation:** the Supabase **service-role key is server-only** — it bypasses RLS and must never reach the browser. In the serverless build (§9.1) it lives only in **Vercel server env vars**, used exclusively inside Next.js Route Handlers (server code). The **frontend/browser uses the anon key only.**
+
+### 9.1 Serverless build plan (Vercel + Supabase) — LOCKED 2026-07-24
+
+Replace the Python FastAPI backend with **Next.js Route Handlers inside the existing `frontend/` app**, and rebuild the recording pipeline as **submit + webhook**. One repo, one deploy (Vercel), Supabase unchanged. The frontend pages/components, Supabase schema/migrations, RLS/views, `recording_jobs` table, and the Claude prompts all **carry over unchanged**.
+
+**A. New file layout (all under `frontend/`):**
+```
+frontend/
+├── app/api/
+│   ├── auth/me/route.ts               GET   ← /auth/me
+│   ├── users/route.ts                 GET   ← /users?search
+│   ├── tasks/route.ts                 POST  ← /tasks (create)
+│   ├── tasks/dashboard/route.ts       GET   ← /tasks/dashboard
+│   ├── tasks/received/route.ts        GET   ← /tasks/received?page&search
+│   ├── tasks/allocated/route.ts       GET   ← /tasks/allocated?page&search
+│   ├── tasks/[id]/complete/route.ts   PATCH ← /tasks/{id}/complete
+│   ├── meetings/route.ts              GET   ← /meetings?page
+│   ├── meetings/[id]/route.ts         GET   ← /meetings/{id}
+│   ├── meetings/batch/route.ts        POST  ← /meetings/batch
+│   ├── ideas/route.ts                 GET+POST ← /ideas
+│   ├── extensions/route.ts            POST  ← /extensions
+│   ├── extensions/[id]/decide/route.ts PATCH ← /extensions/{id}/decide
+│   ├── performance/me/route.ts        GET   ← /performance/me
+│   ├── performance/org/route.ts       GET   ← /performance/org (leadership)
+│   ├── performance/extensions/my/route.ts GET ← /performance/extensions/my
+│   ├── recordings/upload/route.ts     POST  ← submit to AssemblyAI + webhook
+│   └── recordings/webhook/route.ts    POST  ← AssemblyAI callback → Claude → DB  (NOT user-authed)
+├── lib/server/                        (server-only; never imported by client components)
+│   ├── supabaseAdmin.ts   service-role client
+│   ├── auth.ts            requireUser(req): verify Bearer JWT → users row (+company+designation)
+│   ├── claude.ts          port of extraction.py (3 prompts + IST now-context)
+│   └── assemblyai.ts      submit-with-webhook + webhook-signature verify
+└── lib/api.ts             BASE → '' (same origin); function signatures unchanged
+```
+
+**B. The 19 endpoints port 1:1** from the Python routers (auth·users·tasks·meetings·ideas·extensions·performance). Same request/response shapes as `models/schemas.py`, so the frontend's `lib/api.ts` signatures and every page/component stay the same. Each handler: `requireUser()` → scope the Supabase query to that user → return JSON. **Security stays app-enforced in the handler** (service-role bypasses RLS — same model the FastAPI backend uses today; noted in §12). Leadership endpoints (`/performance/org`, and the §7.5 dashboard reads) check the verified `capability_tier` from `requireUser()`.
+
+**C. Recording pipeline — the one real redesign (poll-and-wait → submit+webhook):**
+1. `POST /api/recordings/upload` (user-authed, < 2s): validate `job_type`; upload the audio Blob to Supabase Storage `audio` bucket; insert a `recording_jobs` row (`status = processing`); create a signed URL; call AssemblyAI **`POST /v2/transcript`** with `audio_url`, `language_detection` (see §16/objective ACCURATE), **`webhook_url = <SITE_URL>/api/recordings/webhook`**, and a webhook auth secret; save AssemblyAI's transcript id on the job row; return the job id.
+2. AssemblyAI transcribes **on its own servers**, then POSTs to our webhook.
+3. `POST /api/recordings/webhook` (authenticated by the **AssemblyAI webhook secret**, not a user JWT): verify the secret; find the `recording_jobs` row by transcript id; if transcript empty → set `status = error`, "No speech detected"; else run the correct Claude extraction by `job_type` (task/meeting/idea); write the result JSON on the job row; set `status = complete`. **Idempotent** — a duplicate callback for an already-complete job is ignored.
+4. Frontend picks up the result via the existing **Supabase Realtime** subscription on `recording_jobs`. No change.
+
+**D. Env vars (Vercel):**
+- **Server-only (no `NEXT_PUBLIC_`):** `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `ASSEMBLYAI_API_KEY`, `ASSEMBLYAI_WEBHOOK_SECRET`, `SITE_URL` (public Vercel URL for the webhook).
+- **Public:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+- **Removed:** `NEXT_PUBLIC_BACKEND_URL` (API is now same-origin) and CORS entirely (same origin).
+
+**E. Order of work (test each step before the next):**
+1. Shared helpers: `supabaseAdmin`, `auth`, `claude`, `assemblyai`.
+2. Read paths first: `/api/auth/me`, `/api/users`, `/api/tasks/dashboard` → confirm login + dashboard work.
+3. Task flow: received / allocated / create / complete.
+4. Meetings, ideas, extensions, performance (me / org / extensions).
+5. Recording pipeline (upload + webhook) — tested on a **deployed Vercel preview** (the webhook needs a public URL AssemblyAI can reach).
+6. Switch `lib/api.ts` to same-origin; drop `NEXT_PUBLIC_BACKEND_URL`.
+7. Retire `backend/` — stop deploying it (kept in git history).
+
+**F. Known caveats (flagged, decided during build):**
+- **Local dev + webhook:** AssemblyAI cannot call `localhost`. Test the recording pipeline on a Vercel **preview deployment** (or a tunnel). All non-recording endpoints work fine locally.
+- **Next.js 16.2.9 breaking changes** (`frontend/AGENTS.md`): **read `node_modules/next/dist/docs/` before writing any route handler** — Route Handler conventions may differ from training data.
+- **Runtime:** route handlers using the service-role SDK + Anthropic SDK run on the **Node runtime**, not Edge.
+- **Vercel function duration:** webhook runs Claude (~10s) — inside Vercel's 60s default (Pro extends to 300s). Upload < 2s.
 
 ---
 
@@ -722,8 +784,8 @@ The developer does not need to ask about any of these.
 | **How is leadership access granted?** | **By seeding/admin only — never self-selected. Signup dropdown excludes leadership tiers; backend rejects self-assignment; RLS reads the verified stored tier. Self-claiming CEO is structurally impossible.** |
 | **What are the product's non-negotiable objectives?** | **Accurate, reliable, fast — in that priority when they conflict. Defined concretely in §0.** |
 | **What is the target hosting architecture?** | **Fully serverless on Vercel + Supabase — no always-on server. Recording pipeline uses submit-plus-webhook; CRUD moves into Supabase (RLS/views/RPC). See §0.** |
-| **What is the interim hosting for the pilot?** | **FastAPI backend on Render (free) + Next.js on Vercel + Supabase. A temporary bridge, not the final architecture. Railway is dropped.** |
-| **When do we do the serverless migration?** | **After the pilot proves accuracy (Phase 1C hard gate). Never destabilise a working pilot to chase architecture.** |
+| **Is there an interim always-on server?** | **No (decided 2026-07-24). Railway and a brief Render bridge were both dropped before carrying traffic. We build directly on the serverless target. The FastAPI `backend/` is superseded and reimplemented as serverless functions.** |
+| **What order do we build/ship in?** | **Build the serverless app (Vercel + Supabase) → deploy & run the 2–3 person pilot on it → prove accuracy (Phase 1C hard gate) before org-wide rollout.** |
 
 ---
 
