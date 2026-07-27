@@ -36,7 +36,7 @@ export async function GET(request: Request) {
       id: string
       name: string
       email: string
-      company_id: string
+      company_id: number
       companies: { name: string } | null
     }>
 

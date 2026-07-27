@@ -2,9 +2,8 @@ export type UserBrief = {
   id: string
   name: string
   email: string
-  company_id: string
+  company_id: number
   company_name: string
-  company_code?: number
 }
 
 export type UserProfile = UserBrief & {
@@ -62,7 +61,7 @@ export type ExtensionResponse = {
 export type MeetingResponse = {
   id: string
   recorded_by: string
-  company_id: string
+  company_id: number
   mom_summary?: string
   audio_url?: string
   created_at: string
