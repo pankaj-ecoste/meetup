@@ -15,7 +15,7 @@ export default function IdeaPage() {
   const [token, setToken] = useState('')
   const [ideas, setIdeas] = useState<IdeaResponse[]>([])
   const [loadingIdeas, setLoadingIdeas] = useState(false)
-  const { stage, statusLabel, jobResult, errMsg, start, reset } = useRecordingJob('idea')
+  const { stage, statusLabel, jobResult, jobTranscript, errMsg, start, reset } = useRecordingJob('idea')
 
   useEffect(() => {
     async function init() {
@@ -105,6 +105,7 @@ export default function IdeaPage() {
         <ReviewForm
           jobType="idea"
           result={jobResult}
+          transcript={jobTranscript}
           users={[]}
           token={token}
           onDone={() => { reset(); loadIdeas(token) }}

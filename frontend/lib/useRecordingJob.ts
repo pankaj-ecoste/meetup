@@ -29,11 +29,17 @@ export const STAGE_LABEL: Record<RecordingStage, string> = {
 // finishes the job within one interval instead of leaving an infinite spinner.
 const POLL_INTERVAL_MS = 6000
 
-type JobRow = { status: JobStatus; result?: Record<string, unknown> | null; error_msg?: string | null }
+type JobRow = {
+  status: JobStatus
+  result?: Record<string, unknown> | null
+  error_msg?: string | null
+  transcript?: string | null
+}
 
 export function useRecordingJob(jobType: 'task_delegation' | 'meeting' | 'idea') {
   const [stage, setStage] = useState<RecordingStage>('idle')
   const [jobResult, setJobResult] = useState<Record<string, unknown> | null>(null)
+  const [jobTranscript, setJobTranscript] = useState('')
   const [errMsg, setErrMsg] = useState('')
 
   const jobIdRef = useRef<string | null>(null)
@@ -49,6 +55,7 @@ export function useRecordingJob(jobType: 'task_delegation' | 'meeting' | 'idea')
 
   const applyStatus = useCallback((row: JobRow) => {
     if (resolvedRef.current) return
+    if (row.transcript) setJobTranscript(row.transcript)
     if (row.status === 'done') {
       resolvedRef.current = true
       clearPoll()
@@ -119,8 +126,9 @@ export function useRecordingJob(jobType: 'task_delegation' | 'meeting' | 'idea')
     jobIdRef.current = null
     setStage('idle')
     setJobResult(null)
+    setJobTranscript('')
     setErrMsg('')
   }, [clearPoll])
 
-  return { stage, statusLabel: STAGE_LABEL[stage], jobResult, errMsg, start, reset }
+  return { stage, statusLabel: STAGE_LABEL[stage], jobResult, jobTranscript, errMsg, start, reset }
 }

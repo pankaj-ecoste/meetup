@@ -15,7 +15,7 @@ export default function DelegatePage() {
   const [token, setToken] = useState('')
   const [users, setUsers] = useState<UserBrief[]>([])
   const [saved, setSaved] = useState(false)
-  const { stage, statusLabel, jobResult, errMsg, start, reset } = useRecordingJob('task_delegation')
+  const { stage, statusLabel, jobResult, jobTranscript, errMsg, start, reset } = useRecordingJob('task_delegation')
 
   useEffect(() => {
     async function init() {
@@ -84,6 +84,7 @@ export default function DelegatePage() {
         <ReviewForm
           jobType="task_delegation"
           result={jobResult}
+          transcript={jobTranscript}
           users={users}
           token={token}
           onDone={() => setSaved(true)}

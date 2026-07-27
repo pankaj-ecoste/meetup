@@ -15,7 +15,7 @@ export default function MeetingPage() {
   const [token, setToken] = useState('')
   const [users, setUsers] = useState<UserBrief[]>([])
   const [saved, setSaved] = useState(false)
-  const { stage, statusLabel, jobResult, errMsg, start, reset } = useRecordingJob('meeting')
+  const { stage, statusLabel, jobResult, jobTranscript, errMsg, start, reset } = useRecordingJob('meeting')
 
   useEffect(() => {
     async function init() {
@@ -84,6 +84,7 @@ export default function MeetingPage() {
         <ReviewForm
           jobType="meeting"
           result={jobResult}
+          transcript={jobTranscript}
           users={users}
           token={token}
           onDone={() => setSaved(true)}

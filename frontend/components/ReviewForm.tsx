@@ -222,12 +222,13 @@ function TaskDraftForm({
 type ReviewFormProps = {
   jobType: 'task_delegation' | 'meeting' | 'idea'
   result: Record<string, unknown>
+  transcript?: string
   users: UserBrief[]
   token: string
   onDone: () => void
 }
 
-export default function ReviewForm({ jobType, result, users, token, onDone }: ReviewFormProps) {
+export default function ReviewForm({ jobType, result, transcript, users, token, onDone }: ReviewFormProps) {
   const [submitted, setSubmitted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -236,7 +237,7 @@ export default function ReviewForm({ jobType, result, users, token, onDone }: Re
   const initTask = (): TaskDraft => {
     const r = result as Partial<ExtractedTask>
     return {
-      description: r.description ?? '',
+      description: r.description?.trim() || transcript || '',
       assigneeId: bestMatch(r.doer_name, users),
       deadline: parseDeadline(r.deadline),
       reportToId: bestMatch(r.report_to_name, users),
@@ -255,13 +256,13 @@ export default function ReviewForm({ jobType, result, users, token, onDone }: Re
     }))
   }
   const [momSummary, setMomSummary] = useState(
-    (result as Partial<ExtractedMeeting>).mom_summary ?? ''
+    (result as Partial<ExtractedMeeting>).mom_summary?.trim() || transcript || ''
   )
   const [meetingTasks, setMeetingTasks] = useState<TaskDraft[]>(initMeetingTasks)
 
   // ── Idea state ──
   const [ideaSummary, setIdeaSummary] = useState(
-    (result as Partial<ExtractedIdea>).summary ?? ''
+    (result as Partial<ExtractedIdea>).summary?.trim() || transcript || ''
   )
   const [ideaTags, setIdeaTags] = useState<string[]>(
     (result as Partial<ExtractedIdea>).tags ?? []
@@ -345,9 +346,27 @@ export default function ReviewForm({ jobType, result, users, token, onDone }: Re
     setTagInput('')
   }
 
+  const [showTranscript, setShowTranscript] = useState(false)
+
   // ── Render ──
   return (
     <div className="space-y-5">
+      {transcript && (
+        <div className="border border-gray-200 rounded-xl overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowTranscript(s => !s)}
+            className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-gray-500 bg-gray-50 hover:bg-gray-100"
+          >
+            <span>What we heard (tap to {showTranscript ? 'hide' : 'view'})</span>
+            <span>{showTranscript ? '▲' : '▼'}</span>
+          </button>
+          {showTranscript && (
+            <p className="px-3 py-2 text-sm text-gray-700 whitespace-pre-wrap">{transcript}</p>
+          )}
+        </div>
+      )}
+
       {jobType === 'task_delegation' && (
         <>
           <div className="flex items-center gap-2 text-sm text-teal-700 bg-teal-50 border border-teal-200 rounded-xl px-3 py-2">
