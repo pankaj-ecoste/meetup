@@ -78,6 +78,30 @@ export const api = {
   orgPerformance: (token: string, search = '') =>
     authFetch(`/performance/org?search=${encodeURIComponent(search)}`, token),
 
+  leadershipToday: (token: string) =>
+    authFetch('/leadership/today', token),
+
+  leadershipTasks: (
+    token: string,
+    params: {
+      assignedFrom?: string
+      assignedTo?: string
+      deadlineFrom?: string
+      deadlineTo?: string
+      search?: string
+      page?: number
+    },
+  ) => {
+    const sp = new URLSearchParams()
+    if (params.assignedFrom) sp.set('assigned_from', params.assignedFrom)
+    if (params.assignedTo) sp.set('assigned_to', params.assignedTo)
+    if (params.deadlineFrom) sp.set('deadline_from', params.deadlineFrom)
+    if (params.deadlineTo) sp.set('deadline_to', params.deadlineTo)
+    if (params.search) sp.set('search', params.search)
+    sp.set('page', String(params.page ?? 1))
+    return authFetch(`/leadership/tasks?${sp.toString()}`, token)
+  },
+
   employees: (token: string) =>
     authFetch('/admin/employees', token),
 

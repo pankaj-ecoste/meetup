@@ -553,6 +553,31 @@ group by u.id, u.name, u.email, u.company_id, c.name, d.capability_tier;
 
 commit;
 
+-- ── 0018: leadership_task_register view ──────────────────────
+-- Flat, description-free view of every task, for the leadership-only
+-- org-wide task register (plan.md §7.5 Part A). Same security pattern as
+-- user_performance: queried only by /api/leadership/tasks with the
+-- service-role client, gated on capability_tier = 'leadership' in the route.
+create or replace view leadership_task_register as
+select
+  t.id            as task_id,
+  t.source,
+  t.status,
+  t.created_at    as assigned_date,
+  t.deadline,
+  t.assignor_id,
+  ar.name         as assignor_name,
+  ar.email        as assignor_email,
+  t.assignee_id,
+  ae.name         as assignee_name,
+  ae.email        as assignee_email,
+  ae.company_id,
+  c.name          as company_name
+from tasks t
+join users ar on ar.id = t.assignor_id
+join users ae on ae.id = t.assignee_id
+join companies c on c.id = ae.company_id;
+
 -- ── Founder user row ─────────────────────────────────────────
 -- Run this AFTER the founder logs in via OTP for the first time.
 -- Replace <FOUNDER_AUTH_UID> with the UUID from Authentication → Users in Supabase dashboard.

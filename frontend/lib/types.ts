@@ -108,6 +108,28 @@ export type EmployeesResponse = {
   designations: DesignationBrief[]
 }
 
+export type TodaySnapshot = {
+  assigned_today: number
+  completed_today: number
+  pending_now: number
+}
+
+export type LeadershipTaskRow = {
+  task_id: string
+  source: TaskSource
+  status: TaskStatus
+  assigned_date: string
+  deadline: string
+  assignor_id: string
+  assignor_name: string
+  assignor_email: string
+  assignee_id: string
+  assignee_name: string
+  assignee_email: string
+  company_id: number
+  company_name: string
+}
+
 export type PerformanceRow = {
   user_id: string
   name: string
