@@ -191,6 +191,7 @@ For Phase 1's small pilot, a **Supabase-table-as-queue** is enough — replaceab
 | Tasks Received | View | Every task assigned to me (delegation OR meeting), with source tag |
 | Tasks Allocated | View | Every task I assigned to others, with status |
 | Meetings | View | Past meetings with their MoM summaries + tasks generated |
+| **New-task notification** *(planned 2026-07-27, not yet built)* | In-app alert | When someone assigns a task to you, a quick toast/badge + light notification sound fires on your Dashboard (via the existing Realtime subscription — no new infra). Small, low-priority addition; not a hard requirement for the admin-UI step. |
 
 ### Leadership-only home item (visible only when `capability_tier = 'leadership'`)
 

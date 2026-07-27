@@ -78,6 +78,12 @@ export const api = {
   orgPerformance: (token: string, search = '') =>
     authFetch(`/performance/org?search=${encodeURIComponent(search)}`, token),
 
+  employees: (token: string) =>
+    authFetch('/admin/employees', token),
+
+  createEmployee: (token: string, body: object) =>
+    authFetch('/admin/employees', token, { method: 'POST', body: JSON.stringify(body) }),
+
   recordingJob: (token: string, jobId: string) =>
     authFetch(`/recordings/jobs/${jobId}`, token),
 

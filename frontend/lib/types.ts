@@ -78,6 +78,36 @@ export type IdeaResponse = {
   company_name?: string
 }
 
+export type CompanyBrief = {
+  id: number
+  name: string
+}
+
+export type DesignationBrief = {
+  id: string
+  name: string
+}
+
+export type EmployeeRow = {
+  id: string
+  name: string
+  email: string
+  phone?: string
+  is_active: boolean
+  password_set: boolean
+  company_id: number
+  company_name: string
+  designation_id?: string
+  designation_name: string
+  created_at: string
+}
+
+export type EmployeesResponse = {
+  employees: EmployeeRow[]
+  companies: CompanyBrief[]
+  designations: DesignationBrief[]
+}
+
 export type PerformanceRow = {
   user_id: string
   name: string

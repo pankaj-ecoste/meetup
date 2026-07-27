@@ -17,7 +17,10 @@ const NAV_ITEMS = [
   { href: '/performance', label: 'My Performance', icon: '📊' },
 ]
 
-const LEADERSHIP_ITEM = { href: '/org-performance', label: 'Org Performance', icon: '🏢' }
+const LEADERSHIP_ITEMS = [
+  { href: '/org-performance', label: 'Org Performance', icon: '🏢' },
+  { href: '/admin/employees', label: 'Manage Employees', icon: '🧑‍💼' },
+]
 
 // Items shown in mobile bottom nav (5 max)
 const MOBILE_NAV = [
@@ -46,7 +49,7 @@ export default function Nav({ profile }: Props) {
 
   const allItems = [
     ...NAV_ITEMS,
-    ...(profile?.capability_tier === 'leadership' ? [LEADERSHIP_ITEM] : []),
+    ...(profile?.capability_tier === 'leadership' ? LEADERSHIP_ITEMS : []),
   ]
 
   function NavItem({ href, label, icon }: { href: string; label: string; icon: string }) {
