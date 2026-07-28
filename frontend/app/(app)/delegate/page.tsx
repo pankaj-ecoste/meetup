@@ -12,9 +12,9 @@ import type { UserBrief } from '@/lib/types'
 
 export default function DelegatePage() {
   const router = useRouter()
-  const [token, setToken] = useState('')
   const [users, setUsers] = useState<UserBrief[]>([])
   const [saved, setSaved] = useState(false)
+  const [manual, setManual] = useState(false)
   const { stage, statusLabel, jobResult, jobTranscript, errMsg, start, reset } = useRecordingJob('task_delegation')
 
   useEffect(() => {
@@ -22,7 +22,6 @@ export default function DelegatePage() {
       const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
-      setToken(session.access_token)
       try {
         const u = await api.users(session.access_token)
         setUsers(u)
@@ -56,11 +55,37 @@ export default function DelegatePage() {
         Speak who needs to do what and by when. Hindi, English, or Hinglish — all work.
       </p>
 
-      {stage === 'idle' && (
+      {stage === 'idle' && !manual && (
         <div className="flex flex-col items-center py-8">
           <RecordButton onRecordingComplete={start} maxSeconds={300} />
           <p className="text-xs text-gray-400 mt-6">Max 5 minutes</p>
+          <button
+            type="button"
+            onClick={() => setManual(true)}
+            className="mt-6 text-sm text-indigo-600 hover:underline"
+          >
+            Or type it in manually
+          </button>
         </div>
+      )}
+
+      {stage === 'idle' && manual && (
+        <>
+          <button
+            type="button"
+            onClick={() => setManual(false)}
+            className="text-sm text-gray-500 hover:underline mb-4"
+          >
+            ← Back to recording
+          </button>
+          <ReviewForm
+            jobType="task_delegation"
+            result={{}}
+            users={users}
+            manual
+            onDone={() => setSaved(true)}
+          />
+        </>
       )}
 
       {(stage === 'uploading' || stage === 'pending' || stage === 'transcribing' || stage === 'extracting') && (
@@ -86,7 +111,6 @@ export default function DelegatePage() {
           result={jobResult}
           transcript={jobTranscript}
           users={users}
-          token={token}
           onDone={() => setSaved(true)}
         />
       )}

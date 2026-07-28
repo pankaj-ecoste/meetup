@@ -86,7 +86,6 @@ export default function MeetingPage() {
           result={jobResult}
           transcript={jobTranscript}
           users={users}
-          token={token}
           onDone={() => setSaved(true)}
         />
       )}

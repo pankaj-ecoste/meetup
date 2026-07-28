@@ -8,6 +8,7 @@ import type {
   ExtractedIdea,
 } from '@/lib/types'
 import { api } from '@/lib/api'
+import { createClient } from '@/lib/supabase/client'
 
 // ── User dropdown ─────────────────────────────────────────────────────────────
 
@@ -224,14 +225,27 @@ type ReviewFormProps = {
   result: Record<string, unknown>
   transcript?: string
   users: UserBrief[]
-  token: string
   onDone: () => void
+  // True when the user chose to type the details in directly, skipping the
+  // record → transcribe → extract pipeline entirely. `result` is then just
+  // `{}` — every field starts blank instead of AI-prefilled.
+  manual?: boolean
 }
 
-export default function ReviewForm({ jobType, result, transcript, users, token, onDone }: ReviewFormProps) {
+export default function ReviewForm({ jobType, result, transcript, users, onDone, manual = false }: ReviewFormProps) {
   const [submitted, setSubmitted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+
+  // Reviewing a long meeting (many tasks, manual assignee lookups) can take
+  // long enough that a token captured once at page load has since expired —
+  // grab a fresh one right at submit time instead of trusting an old one.
+  async function freshToken(): Promise<string> {
+    const supabase = createClient()
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) throw new Error('Your session expired — please sign in again.')
+    return session.access_token
+  }
 
   // ── Task delegation state ──
   const initTask = (): TaskDraft => {
@@ -279,6 +293,7 @@ export default function ReviewForm({ jobType, result, transcript, users, token, 
       if (!description.trim() || !assigneeId || !deadline || !reportToId) return
       setSubmitting(true)
       try {
+        const token = await freshToken()
         const dl = new Date(deadline).toISOString()
         await api.createTask(token, {
           source: 'task_delegation',
@@ -303,6 +318,7 @@ export default function ReviewForm({ jobType, result, transcript, users, token, 
       if (!allValid) return
       setSubmitting(true)
       try {
+        const token = await freshToken()
         const tasks = meetingTasks.map(t => ({
           source: 'meeting' as const,
           assignee_id: t.assigneeId,
@@ -327,6 +343,7 @@ export default function ReviewForm({ jobType, result, transcript, users, token, 
       if (!ideaSummary.trim()) return
       setSubmitting(true)
       try {
+        const token = await freshToken()
         await api.createIdea(token, {
           summary: ideaSummary.trim(),
           tags: ideaTags,
@@ -371,7 +388,7 @@ export default function ReviewForm({ jobType, result, transcript, users, token, 
         <>
           <div className="flex items-center gap-2 text-sm text-teal-700 bg-teal-50 border border-teal-200 rounded-xl px-3 py-2">
             <span>✓</span>
-            <span>Recording analysed. Review and confirm below.</span>
+            <span>{manual ? 'Fill in the task details below.' : 'Recording analysed. Review and confirm below.'}</span>
           </div>
           <TaskDraftForm
             draft={taskDraft}
@@ -422,7 +439,7 @@ export default function ReviewForm({ jobType, result, transcript, users, token, 
         <>
           <div className="flex items-center gap-2 text-sm text-teal-700 bg-teal-50 border border-teal-200 rounded-xl px-3 py-2">
             <span>✓</span>
-            <span>Idea captured. Review and save.</span>
+            <span>{manual ? 'Type your idea below.' : 'Idea captured. Review and save.'}</span>
           </div>
 
           <div>

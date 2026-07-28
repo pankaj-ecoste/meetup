@@ -162,6 +162,8 @@ The whole product is one loop, repeated three ways.
 | **Meeting Recording** | A meeting summary (MoM) **plus an array of tasks** — many tasks for many people | One recording → multiple tasks, each with its own doer/deadline. Reviewed together, submitted as a batch. |
 | **Idea Storage** | A short summary + topic tags. No doer, no deadline. | Lightest. No mandatory fields, no review gate. Tap, talk, done. Visible to the whole org. |
 
+**Manual entry, no recording required (added 2026-07-28):** Task Delegation and Idea Storage both offer a "type it in manually" path alongside the mic button — the same review form (`ReviewForm`), just opened with an empty `result: {}` instead of one filled by Claude, so every field starts blank and is typed directly. This skips SPEAK/TRANSCRIBE/EXTRACT entirely and goes straight to CONFIRM. Reuses the existing form/validation/submit code as-is — no new component, no schema change. Meeting Recording has no manual equivalent (a meeting's multi-task structure is what recording+extraction is for).
+
 ### Async processing — the architecture decision that matters most
 
 The recording pipeline **must not be a single blocking HTTP request.** Transcribing a 3-minute meeting takes 20–40s; a synchronous request freezes the screen and dies when a phone locks or backgrounds the browser.

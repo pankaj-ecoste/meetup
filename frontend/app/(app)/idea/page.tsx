@@ -15,6 +15,7 @@ export default function IdeaPage() {
   const [token, setToken] = useState('')
   const [ideas, setIdeas] = useState<IdeaResponse[]>([])
   const [loadingIdeas, setLoadingIdeas] = useState(false)
+  const [manual, setManual] = useState(false)
   const { stage, statusLabel, jobResult, jobTranscript, errMsg, start, reset } = useRecordingJob('idea')
 
   useEffect(() => {
@@ -44,10 +45,36 @@ export default function IdeaPage() {
         Tap to record. Your idea will be transcribed and saved to the universal feed.
       </p>
 
-      {stage === 'idle' && (
+      {stage === 'idle' && manual && (
+        <>
+          <button
+            type="button"
+            onClick={() => setManual(false)}
+            className="text-sm text-gray-500 hover:underline mb-4"
+          >
+            ← Back to recording
+          </button>
+          <ReviewForm
+            jobType="idea"
+            result={{}}
+            users={[]}
+            manual
+            onDone={() => { setManual(false); reset(); loadIdeas(token) }}
+          />
+        </>
+      )}
+
+      {stage === 'idle' && !manual && (
         <>
           <div className="flex flex-col items-center py-8 mb-8">
             <RecordButton onRecordingComplete={start} maxSeconds={300} />
+            <button
+              type="button"
+              onClick={() => setManual(true)}
+              className="mt-6 text-sm text-indigo-600 hover:underline"
+            >
+              Or type it in manually
+            </button>
           </div>
 
           {/* Recent ideas feed */}
@@ -107,7 +134,6 @@ export default function IdeaPage() {
           result={jobResult}
           transcript={jobTranscript}
           users={[]}
-          token={token}
           onDone={() => { reset(); loadIdeas(token) }}
         />
       )}
