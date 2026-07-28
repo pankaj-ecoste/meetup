@@ -1,839 +1,606 @@
-# MeetUp — Build Plan (`plan.md`)
+# MeetUp — `plan.md`
 
-> **Internal Operations Platform · Master Build Document**
+> **Internal Operations Platform · Founder's Office**
 > Voice-first capture for tasks, meeting outcomes, and ideas across **Ecoste** (WPC building products), **Lamora** (door solutions), and **Metamask** (metal facade systems).
 >
-> **Owner:** pankaj_ecoste (ai.support@ecoste.in) — Founder's Office
-> **Status:** Prototype **approved by the CEO**. This is now a **production build**, not an experiment.
-> **Target scale:** **200–300 employees** across Ecoste, Lamora, and Metamask (200 at launch, up to ~300).
-> **Infrastructure:** Production Supabase project owned by **ai.support@ecoste.in** (service-role key in backend/Railway env only; frontend uses the anon key).
-> **Build mode:** Claude builds most of it; human reviews and fixes errors at checkpoints.
-> **Source spec:** MeetUp Phase 1 Specification v2.1 + agreed additions (scoring, deadline renegotiation, leadership dashboard).
-> **This file is the single source of truth.** When in doubt, follow this document over memory or assumption.
->
-> **Production note:** CEO approval greenlights building for real — it does **not** cancel the phased discipline. The Phase 1C hard gate (prove extraction accuracy on a small supervised group) still stands, precisely *because* 200–300 people will depend on this. "Production for 200–300" = seeing the build through **Phase 2** (org-wide rollout), not shipping everything to everyone on day one. Two things are now hard prerequisites rather than nice-to-haves: (1) **database indexes** — added in migration `0013`, already in `run_all_migrations.sql`; and (2) **custom SMTP (Brevo)** — Supabase's built-in email will rate-limit long before 200 people can receive OTPs, so it must be wired up before broad onboarding.
+> **Current release: `v1.0` — MVP. Built, deployed, live.**
+> **Owner:** pankaj_ecoste (ai.support@ecoste.in)
+> **Repo:** `github.com/pankaj-ecoste/meetup` · branch `main`
+> **Live on:** Vercel (production) + Supabase project `nydmbszpzygkqutoyzkn`
+> **Last updated:** 2026-07-28
 
 ---
 
-## 0. North Star — what we actually want (LOCKED 2026-07-24)
+## 0. How we work — read this first
 
-> This section is the top of the funnel. Every technical choice below serves the three objectives here. When a decision is unclear, come back to this section first.
+**`plan.md` is written before code, not after.**
 
-### The three objectives — fast, accurate, reliable
-
-The whole product exists to do one thing well: **turn spoken intent into a correct, trustworthy, instantly-available record.** That breaks into three objectives. Treat all three as required, not optional. **When two of them conflict, accuracy wins** — it is the foundation everything else is built on (see §18, "the single most important principle").
-
-**1. ACCURATE — capture exactly what was said, and route it to the right person.**
-- Transcription faithfully handles **Hinglish** (the org's real Hindi/English code-mix), not just clean Hindi or clean English.
-- Extraction returns the **right doer, a sensible description, the correct deadline** (including relative dates like "Friday" / "Monday tak"), and the **right report-to**.
-- Numeric targets: deadline parsed correctly **90%+**, doer matched **85%+** (see §16).
-- A human **always confirms before save**, so accuracy = good machine extraction **plus** a review screen that makes any mistake obvious and trivial to fix.
-- Same-name people are disambiguated by **company**; the system never silently routes to the wrong person.
-
-**2. RELIABLE — work every time, lose nothing, never leave the user stuck.**
-- The app is available when people need it and **never loses a recording** — audio is stored *before* processing begins.
-- Every recording ends in exactly one of two states: **a result, or a clear, actionable error — never an infinite spinner.** (This exact bug was found and fixed once; it must never regress.)
-- Provider failures (AssemblyAI or Claude down, bad JSON, upload timeout) are handled gracefully: the user can re-record or edit the raw transcript; the pipeline **retries where sensible and is idempotent** (processing the same job twice never creates duplicates or corrupts data).
-- **Data integrity is absolute:** RLS keeps every company's data separate; the leadership dashboard is the one deliberate, scoped exception; **no cross-company leak, ever.**
-
-**3. FAST — feel quick on a mid-range phone over mobile data.**
-- Screens load quickly on a mid-range Android over 4G — target first meaningful content in **~2–3s**.
-- The recording flow **never freezes the screen**: upload returns immediately, the AI works in the background, and the user sees a clear "Analysing…" state.
-- A 2-minute clip returns its structured result in **under ~30s** (bounded mainly by AssemblyAI + Claude, not by our own overhead).
-- Lists and dashboards feel instant — **server-side pagination + Supabase Realtime, never polling.**
-- No artificial waits, no blocking calls, no spinner with nothing behind it.
-
-### Architecture decision (LOCKED)
-
-**Target end-state: the entire application runs fully serverless on Vercel + Supabase — no always-on server.**
-
-- **Frontend:** Next.js on **Vercel** (static/SSR served from a global CDN).
-- **Data, Auth, Storage, Realtime:** **Supabase** (Postgres + RLS + Auth + Realtime + Storage).
-- **Backend logic:** Vercel serverless functions and/or **Supabase Edge Functions** + Postgres (RLS, views, RPC). As much CRUD as is safe moves directly onto Supabase with RLS, retiring hand-written backend endpoints.
-- **The recording pipeline is redesigned from "poll-and-wait" to "submit + webhook":** a short function submits the audio to AssemblyAI with a **webhook URL** and returns immediately; AssemblyAI does the long transcription **on its own servers**; when finished it **calls our webhook** (a serverless function), which runs Claude and writes the result; the frontend picks it up via **Supabase Realtime**. Nothing on our side stays open waiting.
-
-**Why serverless is the target:** it matches the workload, scales to zero, costs nothing at idle (no always-on server bill), has fewer moving parts, and — built on webhooks — is **faster and more reliable, not less**. It serves all three objectives directly.
-
-**No interim server (decision 2026-07-24).** A Render free-tier backend was briefly set up as a bridge, then **deleted before it ever carried pilot traffic.** We go **straight to the serverless target — Vercel + Supabase only.** The existing FastAPI backend in `backend/` is **superseded**: its logic is reimplemented as serverless functions (Next.js Route Handlers on Vercel and/or Supabase Edge Functions), and the recording pipeline is rebuilt on the **submit + webhook** pattern. No always-on server exists at any point.
-
-**Sequencing (do not reorder):**
-1. **Build the serverless app** on Vercel + Supabase — port the backend logic to serverless functions, rebuild the recording pipeline as submit+webhook, and push CRUD onto Supabase (RLS/views/RPC) where safe.
-2. **Deploy and run the 2–3 person pilot** on that serverless app — real recordings from real people.
-3. **Prove accuracy** on those real recordings (the Phase 1C hard gate) before any org-wide rollout.
-
-Any earlier text in this document that assumes an always-on server (Railway/Render, "two services", the service-role key living in a persistent server env) is **superseded by this decision.** The service-role key now lives only in the serverless functions that genuinely must bypass RLS; everything else uses the anon key + RLS.
-
----
-
-## How to use this file
-
-This plan is written for a mixed workflow:
-
-- **Roadmap sections** tell you *what we're building and why* — read these to stay oriented.
-- **Build instruction blocks** give exact file paths, schemas, and logic — Claude executes these.
-- **`✅ HUMAN CHECKPOINT`** markers are where *you* stop and verify before moving on. Do not skip these.
-- **`🚪 EXIT GATE`** markers are hard gates. Phase work does not advance until every box is ticked.
-
-Work top to bottom. Each phase assumes the previous one passed its gate.
-
----
-
-## Table of contents
-
-0. [North Star — objectives & architecture (LOCKED)](#0-north-star--what-we-actually-want-locked-2026-07-24)
-1. [Product summary & core principles](#1-product-summary--core-principles)
-2. [What changed from spec v2.1 (the additions)](#2-what-changed-from-spec-v21-the-additions)
-3. [The core loop](#3-the-core-loop)
-4. [Navigation & screen map](#4-navigation--screen-map)
-5. [Database schema (full, with additions)](#5-database-schema-full-with-additions)
-6. [Scoring & deadline renegotiation — design](#6-scoring--deadline-renegotiation--design)
-7. [Leadership dashboard & access control — design](#7-leadership-dashboard--access-control--design)
-8. [Technology stack](#8-technology-stack)
-9. [Repository & architecture](#9-repository--architecture)
-10. [Phase 0 — Project setup](#10-phase-0--project-setup)
-11. [Phase 1A — The AI pipeline](#11-phase-1a--the-ai-pipeline)
-12. [Phase 1B — Views, dashboard, scoring](#12-phase-1b--views-dashboard-scoring)
-13. [Phase 1C — Pilot & stabilise](#13-phase-1c--pilot--stabilise)
-14. [Phase 2 — Org-wide rollout & automation](#14-phase-2--org-wide-rollout--automation)
-15. [Phase 3 — AI calling & full autonomy](#15-phase-3--ai-calling--full-autonomy)
-16. [Success metrics](#16-success-metrics)
-17. [Locked decisions](#17-locked-decisions)
-18. [Security checklist](#18-security-checklist)
-19. [Glossary](#19-glossary)
-
----
-
-## 1. Product summary & core principles
-
-MeetUp is an **internal-only** platform built around three actions: **delegate a task, record a meeting, or store an idea**. A person taps a button, speaks in Hindi / English / Hinglish, and the system transcribes, structures, stores, and routes what they said to the right people.
-
-It is **not** a project-management tool. It is a **voice-first capture layer** that turns spoken intent into a structured, searchable, accountable record — for *every* employee, not just leadership.
-
-**The pipeline follows the proven pattern** (audio → AssemblyAI transcript → LLM extraction), built as clean modules from scratch in a fresh MeetUp codebase (not cloned from CoachUp). The new work is the data model, the three recording flows, the task/scoring views, and the phased rollout.
-
-### Non-negotiable principles (apply to every line of code)
-
-1. **UUID primary keys everywhere** — so the future CRM can reference rows without ID collisions.
-2. **A person is always a foreign key to `users.id`** — never a copied text name on another table. If you find yourself writing a name string into `tasks` or `meetings`, stop: it must be a user reference.
-3. **Row-Level Security (RLS) enforced in Postgres**, not just hidden in the UI. A user reads/writes only their own scoped rows.
-4. **No autonomous actions in Phase 1.** Every record is confirmed by the human who hits submit. That submission *is* the approval.
-5. **Validate AI accuracy on a small supervised pilot before the system is ever trusted to message or call people.** Get extraction right first; everything else is built on that foundation.
-6. **Scores are derived, never stored.** Performance is computed live from the `tasks` table — never a mutable number on the user.
-
----
-
-## 2. What changed from spec v2.1 (the additions)
-
-Four additions were agreed on top of the original spec. They are woven into the relevant sections below; summarised here so nothing is missed.
-
-| # | Addition | Where it lives | Key rule |
-|---|----------|----------------|----------|
-| 1 | **Doer scoring** — each doer sees their own performance | Phase 1B (view), Phase 0 (schema) | Two metrics: on-time completion % **and** current overdue count. Derived live, never stored. |
-| 2 | **Deadline renegotiation** — doer flags a bottleneck, assignor approves a new deadline; the doer's score is judged against the *current* (approved) deadline, so an approved extension carries no penalty | Phase 1 (schema + flow) | Protection comes from the extension being **approved**, not merely claimed. Full audit trail via `task_extensions`. |
-| 3 | **Leadership dashboard** — a CEO/Founder-tier user sees scores of all employees across all three companies, searchable by name/email | Phase 1C (minimal), expanded in Phase 2 | Gated by `capability_tier = 'leadership'`, **assigned by seeding/admin — never self-selected at signup.** Self-claiming "CEO" is structurally impossible. |
-| 4 | **Schema support for the above** | Phase 0 | New fields `completed_at`, `original_deadline` on `tasks`; new `task_extensions` table; `capability_tier` actively used. |
-
-### Why scoring is derived, not stored (read once, never forget)
-
-A stored `score` column drifts out of sync, can't be audited, and can't be recomputed when the formula changes. Instead the score is a **Postgres view** (or API computation) that reads task rows live. Two timestamps make it possible:
-
-- `completed_at` — set when a task flips to completed. *Required* for "on time" — `updated_at` won't do because it changes on any edit.
-- `original_deadline` — captured once at creation, never changed. Lets leadership see "this slipped twice" even when the doer's score is protected by an approved extension.
-
----
-
-## 3. The core loop
-
-The whole product is one loop, repeated three ways.
+This is the single source of truth for MeetUp. There is no separate spec, tracker, or done-list. Every session follows the same order:
 
 ```
-1. SPEAK      → User taps mic, speaks naturally (Hindi/English/Hinglish), taps stop.
-2. TRANSCRIBE → Audio uploads to FastAPI → AssemblyAI → Hinglish transcript.
-3. EXTRACT    → Transcript → Claude → structured JSON (who / what / by when / report to).
-4. CONFIRM    → User sees auto-filled form, corrects anything wrong, fills missing fields, submits.
-5. ROUTE      → Structured record saved; instantly visible to everyone it concerns.
+1. Decide what we're building
+2. Write it into plan.md  ← under §8 "Planned work", using the template there
+3. Then build it
+4. When it ships, move that entry up into §2–§7 as part of the release,
+   mark it ✅, and bump the version in §1
 ```
 
-### The same loop, three ways
+Nothing gets built that isn't written down here first. If a change is worth making, it's worth one paragraph in this file — that paragraph is what stops us re-deciding the same thing three weeks later.
 
-| Entry point | What Claude extracts | What makes it different |
-|-------------|---------------------|-------------------------|
-| **Task Delegation** | One task: doer, description, deadline, report-to (assignor = recorder) | Simplest. One recording → exactly one task. |
-| **Meeting Recording** | A meeting summary (MoM) **plus an array of tasks** — many tasks for many people | One recording → multiple tasks, each with its own doer/deadline. Reviewed together, submitted as a batch. |
-| **Idea Storage** | A short summary + topic tags. No doer, no deadline. | Lightest. No mandatory fields, no review gate. Tap, talk, done. Visible to the whole org. |
-
-**Manual entry, no recording required (added 2026-07-28):** Task Delegation and Idea Storage both offer a "type it in manually" path alongside the mic button — the same review form (`ReviewForm`), just opened with an empty `result: {}` instead of one filled by Claude, so every field starts blank and is typed directly. This skips SPEAK/TRANSCRIBE/EXTRACT entirely and goes straight to CONFIRM. Reuses the existing form/validation/submit code as-is — no new component, no schema change. Meeting Recording has no manual equivalent (a meeting's multi-task structure is what recording+extraction is for).
-
-### Async processing — the architecture decision that matters most
-
-The recording pipeline **must not be a single blocking HTTP request.** Transcribing a 3-minute meeting takes 20–40s; a synchronous request freezes the screen and dies when a phone locks or backgrounds the browser.
-
-Instead:
-- Upload returns a **job ID immediately**.
-- Backend processes in the **background**.
-- Frontend listens for the finished result via a **Supabase Realtime subscription** on the row.
-
-For Phase 1's small pilot, a **Supabase-table-as-queue** is enough — replaceable later without changing the API.
+Everything in **§2 through §7 describes `v1.0` — code that exists in the repo today.** Everything in **§8 is not built yet.**
 
 ---
 
-## 4. Navigation & screen map
+## 1. Release status
 
-**Critical navigation rule:** Task list views are **standalone top-level views**, NOT nested inside the recording flows. A task is a task whether it came from a delegation or a meeting — it lands in the same place. Each task card shows a small `direct` or `from meeting` tag (driven by the existing `source` field — no schema change needed for this).
+| Release | Scope | State |
+|---|---|---|
+| **`v1.0` — MVP** | Voice capture (task / meeting / idea) → AI extraction → human confirm → routed record. Plus task views, scoring, deadline extensions, leadership dashboard, admin UI. | ✅ **Shipped & live** |
+| `v1.1` | Overdue transitions, email/domain completion, ideas feed, CI, key rotation, device testing | ⬜ Planned — §8 |
+| `v2` | WhatsApp notifications, calendar, Drive export, self-signup | ⬜ Future — §9 |
+| `v3` | AI follow-up calling | ⬜ Future — §9 |
 
-### Home screen (every logged-in user sees)
-
-| Home item | Type | What it does |
-|-----------|------|--------------|
-| Task Delegation | Recording | Record one task → single task object |
-| Meeting Recording | Recording | Record a meeting → MoM + N tasks for N people |
-| New Idea / Idea Storage | Recording + View | Capture an idea; browse the universal feed |
-| Home / Dashboard | View | Live counts: given-open, received, completed, overdue |
-| **My Performance** *(new)* | View | The logged-in user's own on-time % + overdue count |
-| Tasks Received | View | Every task assigned to me (delegation OR meeting), with source tag |
-| Tasks Allocated | View | Every task I assigned to others, with status |
-| Meetings | View | Past meetings with their MoM summaries + tasks generated |
-| **New-task notification** *(planned 2026-07-27, not yet built)* | In-app alert | When someone assigns a task to you, a quick toast/badge + light notification sound fires on your Dashboard (via the existing Realtime subscription — no new infra). Small, low-priority addition; not a hard requirement for the admin-UI step. |
-
-### Leadership-only home item (visible only when `capability_tier = 'leadership'`)
-
-| Home item | Type | What it does |
-|-----------|------|--------------|
-| **Org Performance** *(new, gated)* | View | Full leadership dashboard (§7.5): org-wide task register (assigner/doer/deadline/assigned-date/status) with assigned-date & deadline range filters + "today"/"assigned today" quick filters; a **Today snapshot** (assigned / completed / pending); and a **colour-banded scoring analysis** (🟢≥95% · 🟡90–95% · 🔴<90%, click a band → staff list, search by email). All across three companies. |
-
-### Screen states to build (from spec — desktop + phone)
-
-- **Home / Dashboard**: 4 live count cards (given-open, received, completed, overdue) via Realtime; quick-action buttons; recent activity list.
-- **Recording in progress**: red mic button + timer; live "Transcribing…"; then "Analysing your recording…" loading state (covers the 15–30s AI wait).
-- **Review form — all fields found**: green ✓ banner; Doer + Report To as searchable dropdowns (Name + Company), pre-set to Claude's guess; Deadline; Assigned By (you, locked); Confirm button enabled.
-- **Review form — missing field**: ⚠ banner; missing field turns red ("No deadline found — please add"); submit locked until filled.
-- **Tasks Received / Allocated**: unified list, source tag, status colours (**teal** = open/on-track, **red** = overdue, **green** = completed). Server-side pagination + keyword search from day one.
-- **Meetings**: list of past meetings, MoM summary, count of tasks generated, recorded-by; tap to read full minutes.
-- **Idea feed**: universal across all companies; filter by company + date; keyword search.
-- **My Performance** *(new)*: two metric cards + a list of the user's own completed/overdue tasks; extension history.
-- **Org Performance** *(new, leadership)*: the full dashboard in §7.5 — (a) org-wide **task register** with columns assigner / doer / deadline / assigned-date / status, assigned-date & deadline **range filters**, and "deadline today" / "assigned today" quick filters; (b) a **Today snapshot** of assigned / completed / pending counts; (c) a **colour-banded scoring analysis** (🟢 top ≥95% · 🟡 average 90–95% · 🔴 <90%) where clicking a band reveals the staff in it, with **email search** throughout.
-
-> **Name-matching:** Doer and Report To dropdowns are pre-loaded from `users`, showing **Name + Company**. Claude's best guess is pre-selected but correctable. The Company column disambiguates two people with the same name across companies. The system never silently picks the wrong person.
+**Between v1.0 and v1.1 sits one non-code task: the pilot.** The app is verified as *working*; it has never been measured as *accurate* on real speech. That measurement (§8.9) is the gate — see the reasoning in §7.4.
 
 ---
 
-## 5. Database schema (full, with additions)
+## 2. What v1.0 is
 
-**Seven tables** (six original + `task_extensions`). UUID keys everywhere. A person is always an FK to `users.id`. All schema SQL lives versioned in `supabase/migrations/`.
+Three actions on the home screen: **delegate a task**, **record a meeting**, or **store an idea**. A person taps a button, speaks in Hindi / English / Hinglish, and the system transcribes it, structures it, shows it back for confirmation, and routes it to the right people.
 
-### `companies` — 3 rows: Ecoste, Lamora, Metamask
+It is not a project-management tool. It is a **voice-first capture layer** that turns spoken intent into a structured, searchable, accountable record — for every employee, not just leadership.
+
+### Everything shipped in v1.0
+
+| Area | What was built | |
+|---|---|---|
+| Architecture | Fully serverless — Vercel + Supabase, one Next.js app, no always-on server, no CORS | ✅ |
+| API | 25 Next.js Route Handlers under `app/api` — this is the backend | ✅ |
+| Database | 8 tables, 2 views, 18 migrations, RLS on every table, indexes sized for 200–300 users | ✅ |
+| Auth | One-time account claim (OTP once) + email/password login thereafter | ✅ |
+| Recording pipeline | Submit + webhook, idempotent, audio stored before processing, verified end-to-end on production | ✅ |
+| AI extraction | Claude `claude-opus-4-8`, three prompts, strict JSON, IST-aware relative deadlines | ✅ |
+| Task delegation | Record **or** type manually → review form → save | ✅ |
+| Meeting recording | MoM + N tasks extracted together, reviewed as a batch, saved as linked rows | ✅ |
+| Idea capture | Record **or** type manually | ✅ |
+| Task views | Tasks Received · Tasks Allocated · Meetings · Meeting detail — search + pagination | ✅ |
+| Scoring | My Performance — on-time %, overdue count, totals, avg days, extension history | ✅ |
+| Extensions | Request → approve/deny, full audit trail; an approved extension protects the score | ✅ |
+| Leadership dashboard | Org-wide task register + date filters, today snapshot, 🟢🟡🔴 score bands — server-gated | ✅ |
+| Admin UI | Employee roster + add employee, leadership-gated | ✅ |
+| Mobile layout | Desktop sidebar, mobile top bar + slide-out menu, 5-item bottom nav | ✅ |
+
+### Principles the v1.0 code enforces
+
+| | | |
+|---|---|---|
+| 1 | A person is always a foreign key to `users.id` — never a copied name string | ✅ |
+| 2 | Scores are derived from a Postgres view, never stored as a column | ✅ |
+| 3 | No autonomous actions — every record is confirmed by the human who hits submit | ✅ |
+| 4 | Leadership is a `capability_tier`, not a typed job title; no self-service path grants it | ✅ |
+| 5 | Audio is stored before processing begins — a recording is never lost to a pipeline failure | ✅ |
+| 6 | Every recording ends in a result or a clear error — never an infinite spinner | ✅ |
+| 7 | Accuracy > Reliability > Speed when they conflict | ✅ |
+
+---
+
+## 3. How v1.0 is put together
+
+```
+Browser (Next.js pages, anon key)
+   │
+   ├─ page loads ────────────► proxy.ts → Supabase cookie session → redirect /login if none
+   │
+   ├─ data calls ────────────► /api/*  (Next.js Route Handlers, same origin)
+   │                              │  Bearer JWT → requireUser() → service-role Supabase client
+   │                              ▼
+   │                          Supabase Postgres (8 tables + 2 views)
+   │
+   └─ live updates ──────────► Supabase Realtime (recording_jobs, tasks)
+
+Recording:
+   upload ─► Supabase Storage (private `audio`) ─► signed URL ─► AssemblyAI (webhook)
+                                                                      │
+                              webhook ◄──────────────────────────────┘
+                                 └─► Claude extraction ─► recording_jobs.result ─► Realtime ─► UI
+```
+
+| | |
+|---|---|
+| UI and backend are **one Next.js app at the repo root**, same origin — **no CORS anywhere** | ✅ |
+| Route Handlers run on the **Node runtime** (`export const runtime = 'nodejs'`) — required by the Supabase service-role SDK and the Anthropic SDK | ✅ |
+| Security is **app-enforced in every handler**: the service-role key bypasses RLS, so each handler calls `requireUser(req)` and scopes the query itself. RLS stays enabled on every table as the second line of defence | ✅ |
+| The service-role key **never reaches the browser** — all server modules live in `lib/server/` and import `'server-only'`, so the build fails if a client component imports one | ✅ |
+
+### Stack
+
+| Layer | What | Detail |
+|---|---|---|
+| App | Next.js App Router + React + Tailwind + TypeScript | `next@16.2.9`, `react@19.2.4`, Tailwind 4, TS 5 |
+| Hosting | **Vercel** | one project, one deploy, production + previews |
+| DB / Auth / Storage / Realtime | **Supabase** | project `nydmbszpzygkqutoyzkn`, owned by ai.support@ecoste.in |
+| Transcription | **AssemblyAI** | REST via `fetch`; submit-with-webhook; `language_detection: true`, `speaker_labels: true` |
+| AI extraction | **Claude API only** | `@anthropic-ai/sdk`, model **`claude-opus-4-8`**. No OpenAI in the stack |
+| Email | **Mailjet SMTP** in Supabase Auth | carries the one-time claim OTP |
+
+> **Next.js note:** `AGENTS.md` flags that this Next.js version has breaking changes vs. common training data — **read `node_modules/next/dist/docs/` before writing any route handler or convention-based file.** This is why the middleware file is `proxy.ts`.
+
+### Folder structure
+
+**The repo root *is* the app.** There is no `frontend/` folder — the name would be wrong, because `app/api/**` and `lib/server/*` are backend code that never reaches the browser. One Next.js project, one deploy.
+
+```
+meetup/                               ← repo root = the app (Vercel Root Directory = .)
+│
+├── .claude/
+│   └── plan.md                       ← this file — spec, as-built state, and planned work
+├── README.md                         ← clone-and-run guide + the 🌐/🔒 split
+├── .env.example                      ← committed template; every key explained
+├── .env.local                        ← the real keys, git-ignored (§7.1)
+├── .gitignore
+├── AGENTS.md / CLAUDE.md             ← read the local Next.js docs before coding
+├── package.json · package-lock.json
+├── proxy.ts                          ← session refresh + page auth guard
+├── next.config.ts · tsconfig.json · eslint.config.mjs · postcss.config.mjs
+│
+├── supabase/
+│   ├── README.md                     ← fresh setup vs. upgrading an existing DB
+│   ├── setup.sql                     ← ⭐ THE script for a fresh database:
+│   │                                    8 tables + 2 views + RLS + trigger +
+│   │                                    indexes + audio bucket + seeds, idempotent
+│   └── migrations/                   ← history (0001 → 0018); only for upgrading
+│       ├── 0001_companies.sql
+│       ├── 0002_designations.sql
+│       ├── 0003_users.sql
+│       ├── 0004_tasks.sql
+│       ├── 0005_task_extensions.sql
+│       ├── 0006_meetings.sql
+│       ├── 0007_ideas.sql
+│       ├── 0008_tasks_meeting_id_fk.sql
+│       ├── 0009_updated_at_trigger.sql
+│       ├── 0010_user_performance_view.sql
+│       ├── 0011_recording_jobs.sql
+│       ├── 0012_audio_storage_bucket.sql
+│       ├── 0013_performance_indexes.sql
+│       ├── 0014_recording_jobs_transcript_id.sql
+│       ├── 0015_users_password_set_claim_flag.sql
+│       ├── 0016_company_code_and_ceo_designation.sql
+│       ├── 0017_small_ids_for_companies_and_designations.sql
+│       └── 0018_leadership_task_register_view.sql
+│
+├── app/                              ← ⚠️ BOTH kinds of code live here — see the split below
+│   ├── layout.tsx · globals.css · favicon.ico
+│   ├── login/page.tsx                ← email + password sign-in
+│   ├── claim/page.tsx                ← one-time claim: pick → OTP → set password
+│   ├── auth/callback/route.ts        ← Supabase auth code exchange
+│   │
+│   ├── (app)/                        ← 🌐 RUNS IN THE BROWSER — authenticated shell
+│   │   ├── layout.tsx                     (layout does the server auth check)
+│   │   ├── page.tsx                  ← Dashboard: 4 live count cards (Realtime) + quick actions
+│   │   ├── delegate/page.tsx         ← Task delegation — record OR type manually
+│   │   ├── meeting/page.tsx          ← Meeting recording → MoM + N tasks, batch review
+│   │   ├── idea/page.tsx             ← Idea capture — record OR type manually + recent ideas
+│   │   ├── received/page.tsx         ← Tasks Received — search + pagination
+│   │   ├── allocated/page.tsx        ← Tasks Allocated — search + pagination + extension decide
+│   │   ├── meetings/page.tsx         ← Past meetings list
+│   │   ├── meetings/[id]/page.tsx    ← MoM + generated tasks + raw transcript
+│   │   ├── performance/page.tsx      ← My Performance — on-time %, overdue, extension history
+│   │   ├── org-performance/page.tsx  ← LEADERSHIP: full CEO dashboard
+│   │   └── admin/employees/page.tsx  ← LEADERSHIP: roster + add employee
+│   │
+│   └── api/                          ← 🔒 THE BACKEND — 25 Route Handlers, server only,
+│       │                                never sent to the browser
+│       ├── auth/me · auth/claim · auth/pending · auth/pending/email
+│       ├── users
+│       ├── tasks · tasks/dashboard · tasks/received · tasks/allocated · tasks/[id]/complete
+│       ├── meetings · meetings/[id] · meetings/batch
+│       ├── ideas
+│       ├── extensions · extensions/[id]/decide
+│       ├── performance/me · performance/org · performance/extensions/my
+│       ├── leadership/today · leadership/tasks
+│       ├── admin/employees
+│       └── recordings/upload · recordings/webhook · recordings/jobs/[id]
+│
+├── components/                       ← 🌐 RUNS IN THE BROWSER
+│   ├── Nav.tsx                       ← desktop sidebar + mobile top bar + bottom nav; leadership items conditional
+│   ├── RecordButton.tsx              ← record/stop, waveform, timer, WebM(Chrome)/MP4(Safari) detect
+│   ├── ProcessingSteps.tsx           ← staged progress: uploading → transcribing → analysing
+│   ├── ReviewForm.tsx                ← auto-filled confirm form; searchable user dropdowns; missing-field gate
+│   ├── TaskCard.tsx                  ← status colours, complete, request/approve extension
+│   ├── ExtensionModal.tsx            ← doer raises: reason + proposed deadline
+│   ├── ScoreCard.tsx                 ← metric tile
+│   └── leadership/
+│       ├── TodayTiles.tsx            ← assigned / completed / pending today
+│       ├── ScoreBands.tsx            ← 🟢🟡🔴 bands, click to expand staff list
+│       └── TaskRegister.tsx          ← org-wide task register + date filters + email search
+│
+├── lib/
+│   ├── api.ts                        ← 🌐 all browser→/api calls (BASE = '/api')
+│   ├── types.ts                      ← shared TypeScript types
+│   ├── useRecordingJob.ts            ← 🌐 Realtime subscription + 6s poll fallback; stage machine
+│   ├── supabase/client.ts            ← 🌐 browser client (ANON key only)
+│   ├── supabase/server.ts            ← 🔒 server component client (anon key + cookies)
+│   └── server/                       ← 🔒 SERVER ONLY — every file imports 'server-only',
+│       │                                so the build FAILS if browser code imports it
+│       ├── supabaseAdmin.ts          ← service-role client (bypasses RLS — never ships to browser)
+│       ├── auth.ts                   ← requireUser() / requireAuthIdentity() / HttpError
+│       ├── claude.ts                 ← 3 extraction prompts + IST now-context
+│       ├── assemblyai.ts             ← submit-with-webhook + timing-safe secret verify + fetch transcript
+│       ├── tasks.ts                  ← shared task select + join flattening
+│       ├── istDate.ts                ← IST day-boundary helpers for leadership date filters
+│       └── http.ts                   ← jsonError() — renders HttpError as JSON
+│
+└── public/
+```
+
+### 🌐 browser vs 🔒 server — the split that matters
+
+Both live in one project, but Next.js ships them to different places:
+
+| Marker | Where it runs | Who can read it |
+|---|---|---|
+| 🌐 | The user's browser | Anyone — assume it is fully public and editable |
+| 🔒 | Vercel's servers | Nobody but us — never included in the browser bundle |
+
+Three mechanisms keep the wall up: files under `app/api/**` are never bundled for the browser; every file in `lib/server/` imports `'server-only'` so the **build fails** if client code imports it; and only env vars prefixed `NEXT_PUBLIC_` are baked into browser JS — which is why `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY` and `ASSEMBLYAI_API_KEY` have no prefix and never leave the server.
+
+**The security rule that follows from this:** the browser decides what is *shown*; the server decides what is *allowed*. A user can edit the browser code to unhide the leadership menu — and gets nothing, because `/api/leadership/*` re-checks their `capability_tier` in the database on every request and returns 403.
+
+---
+
+## 4. Screens in v1.0
+
+| Route | What it does | |
+|---|---|---|
+| `/login` | Email + password sign-in | ✅ |
+| `/claim` | One-time account claim — pick your name, OTP to your email, set password | ✅ |
+| `/` | Dashboard — 4 live count cards (given-open, received, completed, overdue) via Realtime + quick actions | ✅ |
+| `/delegate` | Record one task, or type it in manually | ✅ |
+| `/meeting` | Record a meeting → MoM + N tasks, reviewed together, submitted as a batch | ✅ |
+| `/idea` | Record an idea, or type it in manually; recent ideas listed inline | ✅ |
+| `/received` | Tasks assigned to me — search, pagination, `direct`/`from meeting` tag, complete, request extension | ✅ |
+| `/allocated` | Tasks I assigned — search, pagination, pending-extension badge, approve/deny | ✅ |
+| `/meetings` | Past meetings with MoM summary + task count | ✅ |
+| `/meetings/[id]` | Full minutes + tasks generated + raw transcript | ✅ |
+| `/performance` | My Performance — on-time %, overdue count, totals, avg days, extension history | ✅ |
+| `/org-performance` | **Leadership only** — task register, today snapshot, score bands | ✅ |
+| `/admin/employees` | **Leadership only** — employee roster + add employee | ✅ |
+
+Leadership items appear in the nav only when `capability_tier === 'leadership'`.
+
+---
+
+## 5. The data model in v1.0
+
+**8 tables + 2 views.** `companies` and `designations` use small human-readable IDs; everything else is UUID.
+
+### `companies` — 3 rows ✅
 | Column | Type | Notes |
-|--------|------|-------|
-| `id` | uuid PK | |
-| `name` | text | Ecoste / Lamora / Metamask |
-
-### `designations` — role lookup; gates feature access
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | uuid PK | |
-| `name` | text | e.g. Team Lead, Executive, CEO |
-| `capability_tier` | text | `standard` \| `leadership`. **Controls which features the role sees.** |
-| `company_id` | uuid FK → companies | |
-
-> **`capability_tier` is the security backbone of the leadership dashboard.** See §7. Leadership is a *tier*, not a free-text title.
-
-### `users` — central identity table; every other table points here
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | uuid PK | |
+|---|---|---|
+| `id` | **smallint PK** | **1001 = Ecoste · 1002 = Lamora · 1003 = Metamask** |
 | `name` | text | |
-| `email` | text | Used for OTP login |
-| `phone` | text | Used for WhatsApp in Phase 2 |
-| `is_active` | boolean | Soft-delete flag — **never hard-delete a user** |
-| `company_id` | uuid FK → companies | |
-| `designation_id` | uuid FK → designations | **A normal user can never set this to a leadership-tier designation themselves.** See §7. |
 
-### `tasks` — the core operational table (heart of the product)
+### `designations` — 2 global rows ✅
 | Column | Type | Notes |
-|--------|------|-------|
-| `id` | uuid PK | |
-| `source` | enum | `task_delegation` \| `meeting` |
-| `meeting_id` | uuid FK → meetings · nullable | Set only when `source = meeting` |
-| `assignor_id` | uuid FK → users | Always the logged-in recorder |
-| `assignee_id` | uuid FK → users | The doer |
-| `description` | text | |
-| `deadline` | timestamp | **Current** deadline (moves when an extension is approved) |
-| `original_deadline` | timestamp | **NEW.** Captured once at creation, never changed. Audit + slip tracking. |
-| `report_to_id` | uuid FK → users | |
-| `status` | enum | `open` \| `completed` \| `overdue` |
-| `completed_at` | timestamp · nullable | **NEW.** Set when status → completed. Required for on-time scoring. |
-| `completion_note` | text · nullable | Optional note from doer on completion |
-| `created_at` | timestamp | |
-| `updated_at` | timestamp | Auto-updated via Postgres trigger |
+|---|---|---|
+| `id` | **text PK** | **`'00'` = CEO · `'01'` = Employee** |
+| `name` | text | `CEO` / `Employee` |
+| `capability_tier` | text | `leadership` (CEO) / `standard` (Employee) |
 
-### `task_extensions` — **NEW.** Deadline renegotiation, with audit trail
+Designations are **global** — no `company_id` on this table. A CEO can delegate to anyone in any of the three companies and sees the full cross-org dashboard.
+
+### `users` ✅
 | Column | Type | Notes |
-|--------|------|-------|
+|---|---|---|
 | `id` | uuid PK | |
-| `task_id` | uuid FK → tasks | |
-| `requested_by` | uuid FK → users | The doer raising the bottleneck |
-| `reason` | text | The bottleneck explanation |
-| `proposed_deadline` | timestamp | The new date the doer is requesting |
-| `status` | enum | `requested` \| `approved` \| `denied` |
-| `decided_by` | uuid FK → users · nullable | The assignor who approved/denied |
-| `decided_at` | timestamp · nullable | |
-| `created_at` | timestamp | |
+| `auth_id` | uuid unique → `auth.users` | **null until the person claims their account** |
+| `name` · `email` (unique) · `phone` | text | |
+| `is_active` | boolean | soft delete — never hard-delete a user |
+| `password_set` | boolean | **false until claimed**; drives the `/claim` list |
+| `company_id` | smallint → companies | |
+| `designation_id` | text → designations | |
+| `created_at` | timestamptz | |
 
-> **On approval:** the parent task's `deadline` is updated to `proposed_deadline`. `original_deadline` is untouched. This is what makes the score fair without making it gameable — see §6.
+### `tasks` ✅
+`id` · `source` (`task_delegation`\|`meeting`) · `meeting_id` (nullable) · `assignor_id` · `assignee_id` · `description` · `deadline` (current) · `original_deadline` (set at creation, never changed) · `report_to_id` · `status` (`open`\|`completed`\|`overdue`) · `completed_at` · `completion_note` · `created_at` · `updated_at` (trigger).
 
-### `meetings` — one row per recorded meeting session
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | uuid PK | |
-| `recorded_by` | uuid FK → users | |
-| `company_id` | uuid FK → companies | |
-| `transcript` | text | Full AssemblyAI output |
-| `audio_url` | text | Supabase Storage signed URL · 90-day retention |
-| `mom_summary` | text | Claude's minutes-of-meeting |
-| `created_at` | timestamp | |
+### `task_extensions` ✅
+`id` · `task_id` · `requested_by` · `reason` · `proposed_deadline` · `status` (`requested`\|`approved`\|`denied`) · `decided_by` · `decided_at` · `created_at`.
 
-### `ideas` — universal; visible to all employees, all companies
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | uuid PK | |
-| `recorded_by` | uuid FK → users | |
-| `summary` | text | |
-| `tags` | text[] | Postgres array — searchable with `@>` operator |
-| `created_at` | timestamp | |
+### `meetings` ✅
+`id` · `recorded_by` · `company_id` (smallint) · `transcript` · `audio_url` · `mom_summary` · `created_at`.
 
-### Status lifecycle note
+### `ideas` ✅
+`id` · `recorded_by` · `summary` · `tags text[]` · `created_at`.
 
-`status` should be kept accurate by a scheduled job / Postgres logic: a task whose `deadline` has passed while still `open` becomes `overdue`. **An approved extension that moves the deadline into the future should move the task back from `overdue` to `open`.** Mark-complete sets `status = completed` and `completed_at = now()`.
+### `recording_jobs` ✅
+`id` · `user_id` · `job_type` (`task_delegation`\|`meeting`\|`idea`) · `audio_url` · `transcript_id` (AssemblyAI id) · `status` (**`pending` → `transcribing` → `extracting` → `done` \| `error`**) · `transcript` · `result jsonb` · `error_msg` · `created_at` · `updated_at`.
+
+### Views ✅
+- **`user_performance`** — per user: `total_tasks`, `completed_tasks`, `on_time_tasks`, `on_time_pct`, `overdue_count`, `avg_days_to_complete`.
+- **`leadership_task_register`** — flat row per task, all companies, joined to assignor / assignee / company. **`description` is never selected in the view** — the privacy rule is enforced structurally, not by filtering downstream.
+
+### RLS ✅
+Enabled on every table. Users read only their own scoped rows (`tasks` readable by assignee or assignor; `recording_jobs` by owner). The `users_update_own` policy blocks a user from pointing their own `designation_id` at a leadership-tier designation.
 
 ---
 
-## 6. Scoring & deadline renegotiation — design
+## 6. How v1.0 works, flow by flow
 
-### 6.1 What the doer sees (My Performance)
+### 6.1 Auth ✅
 
-Two metrics, **never one** (a single number hides a doer who has a high on-time % while sitting on a pile of never-completed overdue tasks):
+**One-time claim** — `/claim`:
 
-1. **On-time completion rate** = `count(completed tasks where completed_at <= deadline) / count(completed tasks)`, shown as a %.
-2. **Current overdue count** = `count(tasks where status = overdue)`.
+| Step | | |
+|---|---|---|
+| 1 | Pick your name from a searchable list of unclaimed profiles — `GET /api/auth/pending` returns rows where `is_active AND NOT password_set` | ✅ |
+| 2 | `POST /api/auth/pending/email` resolves that profile's email on file; the browser calls `supabase.auth.signInWithOtp` | ✅ |
+| 3 | `supabase.auth.verifyOtp` creates a session; `supabase.auth.updateUser({ password })` sets the password | ✅ |
+| 4 | `POST /api/auth/claim` checks the signed-in email matches the profile's email on file, then sets `auth_id` + `password_set = true`. Idempotent; refuses if the profile is already linked to a different auth account | ✅ |
 
-Supporting display: total tasks received, total completed, average days-to-complete, and the user's extension history.
+**Every login after that** — `/login`: `signInWithPassword`. No email round-trip. OTP is used exactly once per person, at claim time.
 
-### 6.2 How the score stays fair (the renegotiation mechanism)
+**Guards:** `proxy.ts` validates the page session with `getUser()` (not `getSession()`) and redirects to `/login`; public paths are `/login` and `/claim`; `/api/*` is excluded because API routes do their own Bearer-token auth via `requireUser(req)`.
 
-The score judges `completed_at <= deadline` against the **current** deadline.
+### 6.2 Recording pipeline ✅
 
-- Doer hits a genuine bottleneck → raises an extension request (`task_extensions` row, `status = requested`) with a reason and a proposed new date.
-- Assignor reviews and **approves** → task's `deadline` moves to the proposed date → the doer is now judged against the new date → **no penalty.**
-- Assignor **denies** → deadline unchanged → the bar stays where it was.
+**Submit + webhook.** Nothing on our side sits open waiting for AssemblyAI.
 
-**Why this can't be gamed:** protection comes from the extension being *approved* by the assignor, not from the doer merely claiming a bottleneck. Every extension is a permanent audit row, and `original_deadline` always shows the true initial commitment, so leadership can still see slippage even where the doer's score is protected.
+| Step | | |
+|---|---|---|
+| 1 | **`POST /api/recordings/upload`** (user-authed, returns in ~1–2s): validate `job_type` → upload the audio Blob to the **private `audio` bucket** at `{user_id}/{uuid}.{ext}` → create a 1-hour signed URL → insert the `recording_jobs` row → submit to AssemblyAI `POST /v2/transcript` with `language_detection`, `speaker_labels`, `webhook_url` and a secret auth header → save `transcript_id` → flip to `transcribing`. **Audio is stored before anything else can fail.** A failed submit marks the job `error`, so the user always gets an outcome | ✅ |
+| 2 | The webhook URL is derived from the **incoming request's own origin** (`x-forwarded-proto` / `x-forwarded-host`) — automatically correct on production, previews and custom domains. `SITE_URL` is an optional override only | ✅ |
+| 3 | AssemblyAI transcribes **on its own servers**, then POSTs our webhook | ✅ |
+| 4 | **`POST /api/recordings/webhook`** — **not** user-authed; authenticated by the AssemblyAI secret header compared with `timingSafeEqual`. Finds the job by `transcript_id`. **Idempotent**: a job already `done`/`error` is acked and skipped, so a duplicate callback never double-processes. Empty transcript → `error` with "No speech detected…". Otherwise: save transcript → `extracting` → run the Claude prompt for that `job_type` → write `result` → `done`. Any throw → `error` with the message | ✅ |
+| 5 | The browser (`useRecordingJob.ts`) subscribes to Supabase **Realtime** on that job row, with a **6-second poll as a reliability net** if a Realtime event is ever dropped. Stages map to on-screen labels: uploading → queuing → transcribing → analysing → review | ✅ |
 
-### 6.3 Implementation
+### 6.3 AI extraction ✅
 
-- Build the score as a **Postgres view** (e.g. `user_performance`) so it's recomputable and consistent across the app, and a thin API endpoint that reads it. Never write a `score` column onto `users`.
-- The view computes per-user: on-time %, overdue count, totals, avg days-to-complete.
-- RLS on the view: a standard user can read **only their own row**. The leadership tier can read **all rows** (the one deliberate cross-company exception — see §7).
+Three system prompts, one client, strict JSON out, model **`claude-opus-4-8`**:
 
-### 6.4 Flow: requesting & approving an extension
+| Flow | Output shape | |
+|---|---|---|
+| Task | `{ doer_name, description, deadline, report_to_name }` | ✅ |
+| Meeting | `{ mom_summary, tasks: [ { doer_name, description, deadline, report_to_name }, … ] }` | ✅ |
+| Idea | `{ summary, tags: [...] }` | ✅ |
 
+The task and meeting prompts carry an **IST now-context**: the current `Asia/Kolkata` datetime plus an instruction to resolve relative deadlines ("Friday", "Monday tak", "kal", "parso", "agle hafte", "shaam 5 baje") to absolute ISO datetimes and never emit a past date. IST is a fixed UTC+5:30, so a hardcoded offset is used — no tz database dependency. Thinking is left off: extraction is a simple structured-output call, and latency stays low.
+
+### 6.4 Confirm before save ✅
+
+Every flow lands on `ReviewForm`, pre-filled with Claude's output. Doer and Report-To are searchable dropdowns from `users` showing **Name + Company** — which is what disambiguates two people with the same name — pre-selected to Claude's best guess but always correctable. The four required fields (**Doer, Description, Deadline, Report To**) turn red and **lock the submit button** until filled. `original_deadline` is set equal to `deadline` at creation. A meeting saves each extracted task as its own row linked by `meeting_id`, reviewed together and submitted as one batch.
+
+### 6.5 Manual entry ✅
+
+Task delegation and idea capture both offer **"Or type it in manually"**, opening the same `ReviewForm` with an empty `result: {}` — every field blank, typed directly. Same validation, same submit path, no new component, no schema change. Meetings have no manual equivalent by design: the multi-task structure is exactly what recording + extraction is for.
+
+### 6.6 Scoring & extensions ✅
+
+- **On-time completion rate** = completed tasks where `completed_at <= deadline` ÷ completed tasks.
+- **Current overdue count** = tasks with `status = 'overdue'`.
+- Both read from the `user_performance` view. Nothing is stored on `users`.
+
+The score judges against the **current** deadline. A doer raises a bottleneck → `POST /api/extensions` with a reason and proposed date → the assignor sees a badge on Tasks Allocated → `PATCH /api/extensions/{id}/decide`. **Approve** moves `tasks.deadline` (leaving `original_deadline` untouched) so there is no penalty; **deny** changes nothing. Protection comes from the extension being **approved**, not from claiming a bottleneck — that is what makes it ungameable — and `original_deadline` preserves the true first commitment for leadership.
+
+### 6.7 Leadership dashboard ✅ — `/org-performance`
+
+Every read crosses company boundaries, so each leadership endpoint re-checks the **server-verified** `capability_tier === 'leadership'` from `requireUser()` and returns **403** otherwise. The page also hides itself for non-leadership users — the UI is the convenience, the server check is the security.
+
+| Part | Endpoint | What | |
+|---|---|---|---|
+| A. Task register | `GET /api/leadership/tasks` | Every task, all companies, any status: assigner · doer · deadline · assigned date · status. Filters: assigned-date range, deadline range, email search, 50/page. IST calendar days converted to UTC bounds via `istDate.ts`. **Description never shown** | ✅ |
+| B. Today snapshot | `GET /api/leadership/today` | Assigned today · completed today · pending now, org-wide, on IST day boundaries | ✅ |
+| C. Score bands | `GET /api/performance/org` | 🟢 ≥95% · 🟡 90–<95% · 🔴 <90%. Click a band to expand the staff in it; search by email | ✅ |
+
+### 6.8 Admin ✅ — `/admin/employees`
+
+`GET /api/admin/employees` returns the roster plus companies/designations lookups; `POST` adds an employee (`auth_id` null, `password_set` false) so they claim their account at `/claim`. Both verbs check the leadership tier. Duplicate email → 409.
+
+**Why self-claiming CEO is impossible:** leadership is a `capability_tier` and never a typed title; the `users_update_own` RLS policy rejects any self-update pointing `designation_id` at a leadership designation; and the only way to create an employee is the leadership-gated admin endpoint. There is no self-signup path.
+
+---
+
+## 7. Running v1.0
+
+### 7.1 Environment variables
+
+All keys live in `.env.local` at the repo root (git-ignored) and in **Vercel project env vars** in production.
+
+**Server-only (must NOT carry the `NEXT_PUBLIC_` prefix):**
+- `SUPABASE_SERVICE_ROLE_KEY` — bypasses RLS; used only inside `lib/server/`
+- `ANTHROPIC_API_KEY`
+- `ASSEMBLYAI_API_KEY`
+- `ASSEMBLYAI_WEBHOOK_SECRET` — the shared secret AssemblyAI echoes back on the callback
+- `SITE_URL` — optional canonical-domain override for the webhook URL
+
+**Public (browser):**
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+There is no `OPENAI_API_KEY` — Claude only.
+
+### 7.2 Local dev
+
+From the repo root:
 ```
-Doer side:
-  1. On a received, still-open task → "Request more time" button.
-  2. Form: reason (required) + proposed new deadline (required).
-  3. Submit → task_extensions row created (status = requested).
-  4. Task card shows "Extension requested — awaiting approval".
-
-Assignor side:
-  5. On Tasks Allocated, the task shows a pending-extension badge.
-  6. Assignor sees reason + proposed date → Approve or Deny.
-  7. Approve → tasks.deadline = proposed_deadline; extension.status = approved;
-              if task was overdue and new deadline is future → status back to open.
-  8. Deny → extension.status = denied; nothing else changes.
-  9. Both outcomes recorded with decided_by + decided_at.
+npm run dev
 ```
+That is the whole app — UI and API together. There is no second service to start and no folder to `cd` into.
 
-> **Phase note:** the schema fields and the extension request→approve flow are built in **Phase 1** (genuinely useful during the supervised pilot). The "My Performance" card ships in **Phase 1B**. In Phase 2, the report-to person and assignor can also receive WhatsApp notifications on extension decisions.
+**Caveat:** AssemblyAI cannot call `localhost`, so the **recording pipeline can only be tested on a deployed Vercel URL** (production or a preview). Every non-recording screen works locally.
 
----
+### 7.3 Fresh database setup
 
-## 7. Leadership dashboard & access control — design
+Paste `supabase/setup.sql` into the Supabase SQL editor and run it once — 8 tables, both views, RLS on everything, the `updated_at` trigger, the indexes, the private `audio` bucket, and the company/designation seeds. Idempotent, so it is safe to re-run.
 
-### 7.1 The requirement
+Then enable **Realtime** on `recording_jobs` and `tasks`, and create the first leadership user by hand — there is no self-signup. Full steps, including the first-user SQL and the email configuration, are in **`supabase/README.md`**.
 
-There is **no separate admin app.** A CEO/Founder-tier user logs in through the same flow as everyone, but sees one **additional** home item — **Org Performance** — showing scores of all employees across all three companies, searchable by name and email.
+Use `supabase/migrations/` **only** to upgrade a database that already holds an older schema — not for a fresh install.
 
-### 7.2 The security model (read carefully — this is the core trap to avoid)
+### 7.4 What v1.0 has *not* proven
 
-**A user must never be able to self-grant leadership access.** If typing "CEO" into a designation field unlocked cross-company visibility, anyone could read all 200–300 employees' data. That would directly break Principle 3 (RLS).
+The pipeline is verified as **working** — audio in, structured record out, on production. It has **never been measured for accuracy** on real Hinglish speech from real employees. Deadline-parsing and doer-matching rates are unknown.
 
-The protection does **not** come from "we created only one CEO designation row." The designation existing in the table doesn't bind it to one human — the real question is *who is allowed to attach that designation to their own account.* The rules:
-
-1. **Leadership is a `capability_tier`, not a free-text title.** The Org Performance view unlocks for `capability_tier = 'leadership'`, never for whatever string a user typed.
-2. **A normal user can never set their own `designation_id` to a leadership-tier designation.** Enforced in **two** places:
-   - **At signup / profile edit:** the designation dropdown shown to a new/standard user **excludes all leadership-tier designations.** They literally cannot pick "CEO." If the API receives a request trying to set a leadership-tier designation from a non-admin session, the backend **rejects it.**
-   - **In the database (RLS):** the cross-company performance policy checks the user's **actual stored `capability_tier`** — not anything they typed or submitted. Even if a bad value somehow landed in a row, the policy reads the verified tier.
-3. **The leadership tier is assigned by seeding or by an admin — never self-service.** For the Phase 1 pilot (founder's office + 1–2 team leads, all seeded), the founder account is **seeded with the leadership tier directly.** There is no self-elevation path in Phase 1 at all.
-
-> **Result:** the CEO flow opens only for the one person whose row you seeded with the leadership tier. "Self-claiming CEO" is structurally impossible because no normal signup path can write that tier onto an account. This holds even later when real self-signup turns on in Phase 2.
-
-### 7.3 What the leadership dashboard shows (scope-limited)
-
-- A searchable table: employee name, company, on-time %, overdue count, task volume.
-- Search by **name** and **email**.
-- The minimal **Phase 1C pilot** dashboard ships this (scores + counts + search) to clear the hard gate.
-- **The full founder-confirmed leadership dashboard is specified in §7.5** — an org-wide task register with date filters, a "today" snapshot, and a colour-banded scoring analysis. §7.5 **supersedes** the earlier "scores + counts only" limitation.
-
-### 7.4 Implementation
-
-- The leadership read is the **one deliberate RLS exception**, tightly scoped to the `user_performance` view (scores/counts), gated on `capability_tier = 'leadership'`.
-- Standard tier: RLS allows reading only their own performance row.
-- The Org Performance home item is conditionally rendered on the frontend **and** protected by RLS on the backend (never UI-only).
-
-> **Phase note:** the spec parked "designation-tier feature gating" in Phase 2. We pull a **minimal** version forward to **Phase 1C** — just the leadership tier + the scoring dashboard. Broader tier-gating (multiple tiers, more gated features) stays in Phase 2.
-
-### 7.5 Leadership (CEO) dashboard — full functional spec (founder requirements, 2026-07-24)
-
-The founder confirmed the leadership dashboard must go **beyond scores-and-counts**. It has three parts. Every read here crosses company boundaries, so **all of it sits behind the one deliberate RLS exception** — gated on the server-verified `capability_tier = 'leadership'`, never UI-only.
-
-**A. Org-wide task register — leadership can always view *every* task, all companies, any status.**
-Each task row shows:
-- **Assigner** — who delegated it.
-- **Doer / assignee** — who is responsible.
-- **Deadline.**
-- **Assigned date** — the task's `created_at`.
-- **Status** — pending / completed / overdue.
-- **Task description is NOT shown** to leadership — metadata only (see privacy decision below).
-
-Filters on the register:
-- **Assigned-date range** — from date A to date B (filters on `created_at`).
-- **Deadline range** — from date A to date B (filters on `deadline`).
-- **Predefined quick filters:**
-  - **Deadline = today** — every task due today.
-  - **Assigned = today** — every task created today.
-- **Search by email** — jump to one staff member's tasks.
-
-**B. "Today" snapshot — one simple, glanceable visual for the current day, org-wide.**
-Three headline tiles (today only):
-- **Assigned today** — tasks created today across the organization.
-- **Completed today** — tasks marked complete today.
-- **Pending now** — tasks currently open/pending in the organization.
-
-**C. Scoring analysis dashboard — colour-banded performers.**
-Employees are grouped by their **on-time completion score** into three colour bands:
-- 🟢 **Green — Top performers:** score **≥ 95%**.
-- 🟡 **Yellow — Average performers:** score **≥ 90% and < 95%**.
-- 🔴 **Red — Needs attention:** score **< 90%**.
-
-Interaction:
-- The CEO sees the three bands (with a count of staff in each).
-- **Clicking a colour** expands the **list of staff in that band** — each showing name + email + score.
-- **Search by email** to find a specific person.
-
-> **Band boundary rule:** bands are defined with **no gaps** — Green is 95% and above, Yellow is 90% up to (but not including) 95%, Red is below 90%. The exact cut-offs (95 / 90) are single constants and trivial to change if you later want different thresholds. "Score" here = the **on-time completion rate** (§6.1), the primary performance metric.
-
-> **Privacy decision (LOCKED 2026-07-24):** the leadership task register shows **metadata only — assigner, doer, deadline, assigned date, status.** The **task description text is deliberately hidden** from leadership; the register is for accountability (who owes what, by when, done or not), not for reading the content of every task. This still **supersedes** the older "scores + counts only, no register at all" stance in §7.3 (leadership now gets the full metadata register + filters), but stops short of exposing task content.
-
-> **Phase note:** the minimal Phase 1C dashboard (scores + counts + search, §7.3) still ships first to clear the hard gate. This §7.5 spec is the **target** leadership dashboard, built as capacity allows on the same RLS gate.
+That measurement is the gate on everything after v1.0 (§8.9). It is deliberate: the system should not be trusted to notify or call 200–300 people until extraction is proven on a small supervised group. If the foundation is shaky, nothing built on top of it can be trusted.
 
 ---
 
-## 8. Technology stack
+## 8. Planned work — `v1.1` ⬜
 
-Each choice is documented so it isn't accidentally reversed mid-build.
+> **This is where new work gets written before it gets built.** Add an entry here first, then code it. When it ships, move it into §2–§7, mark it ✅, and bump the version in §1.
+>
+> **Template for a new entry:**
+> ```
+> ### 8.x <Name> — HIGH | MEDIUM | LOW
+> **What:** one sentence on what changes.
+> **Why:** the problem it solves.
+> **Where:** files / tables / endpoints it touches.
+> **Done when:** the observable condition that proves it works.
+> ```
 
-| Layer | Technology | Why this, not the alternative |
-|-------|-----------|-------------------------------|
-| Backend | **FastAPI (Python)** | Async-native (the pipeline waits on AssemblyAI + Claude). AssemblyAI / Anthropic / Google SDKs are first-class in Python. Auto API docs. Not Flask (no native async); not Django (too heavy). |
-| Frontend | **Next.js (React) + Tailwind** | SSR → fast first load on mid-range Android. One codebase, mobile + desktop. Not a pure SPA (blank screen on slow first load). |
-| Database | **Supabase (Postgres)** | RLS enforced in Postgres itself. Built-in Auth (email OTP). Realtime powers the live dashboard with no custom WebSockets. Dedicated project owned by ai.support@ecoste.in. |
-| Transcription | **AssemblyAI** | Best-in-class Hinglish accuracy — the org's actual language mix. Speaker diarization helps meetings. Proven in CoachUp. Not Whisper (weaker Hinglish); not Google STT (more complex). |
-| AI extraction | **Claude API (only)** | Reliable structured-JSON extraction from messy conversational speech. Three system prompts, one client. **OpenAI is not used — no OpenAI key anywhere in the stack.** |
-| Hosting (target) | **Vercel + Supabase, fully serverless** | See §0. Frontend on Vercel; all backend logic as Vercel/Supabase serverless functions + Postgres RLS; recording pipeline on a submit-plus-webhook flow. No always-on server. Scales to zero, cheaper, and — via webhooks — faster and more reliable. |
-| ~~Hosting (interim, pilot)~~ | ~~Render (free)~~ — **DROPPED 2026-07-24** | Railway, then a Render bridge, were both considered and **dropped before carrying any traffic.** There is **no interim always-on server** — we build directly on the serverless target above. |
-| File storage | **Supabase Storage** | Same RLS model as the DB. Signed URLs with expiry for audio — never public links. No separate object store in Phase 1. |
+### 8.0 Repo restructure — move the app to the repo root — ✅ **DONE 2026-07-28** (⚠️ one manual step left)
+**What:** moved everything out of `frontend/` up to the repo root, so the repo root *is* the app. `frontend/` deleted.
+**Why:** `frontend/` held **both the UI and the backend** — `app/api/**` and `lib/server/*` never reach the browser. The name misled about where server code lives. One deployable, so nothing left to split.
+**Done:** 84 files moved with `git mv` (all recorded as renames, history preserved) · `.env.local` moved by hand, verified intact · the two `.gitignore` files merged into one at root, dead Python section and stale `backend/.env.example` comment dropped · stale `.next` + `tsconfig.tsbuildinfo` cleared · `npm install` reconciled · **`npm run build` compiles clean, all 25 API routes present.** Zero code changes — the `@/*` alias resolves to `./*` relative to the project root and nothing referenced `frontend/`.
 
-### Deferred to later phases — **do not build in Phase 1**
+> ### ⚠️ 8.0a Vercel Root Directory — **STILL TO DO, NOT IN GIT**
+> **Vercel dashboard → Settings → Build & Development → Root Directory: change `frontend` → blank (`.`), then redeploy.**
+> Until this is changed, **the next deploy will fail** — Vercel will look inside a `frontend/` folder that no longer exists. This cannot be done from the repo; it is a dashboard setting.
+> **Done when:** a deploy goes green and the live site logs in and loads the dashboard.
 
-| Service | Phase | Purpose |
-|---------|-------|---------|
-| WhatsApp provider (Meta Cloud API / AiSensy / Twilio) | Phase 2 | Notifications. **Decide during Phase 1C** — Meta template approval takes 3–7 days and must not block Phase 2. |
-| Google Calendar API | Phase 2 | Auto-create events from meeting MoMs. |
-| Google Drive API | Phase 2 | Export MoM summaries to `_BRAIN/MTG` folder. |
-| VAPI.ai | Phase 3 | AI follow-up calls — purpose-built for AI calling. |
+### 8.0b Clone-and-run: tidy `supabase/`, real README, `.env.example` — ✅ **DONE 2026-07-28**
+**What:** made a fresh `git clone` runnable by someone who has never seen the project.
+**Why:** three gaps — `supabase/seed.sql` was **redundant and broken** (it seeded UUID company ids and 12 per-company designations, i.e. the schema as it was *before* 0016/0017 re-keyed it, so it would fail on a current database); `README.md` was untouched `create-next-app` boilerplate; and there was no `.env.example`, so a cloner could not know which keys were needed.
+**Done:**
+- **Deleted** `supabase/seed.sql` — superseded by `setup.sql`, recoverable from git history
+- **Renamed** `run_all_migrations.sql` → **`setup.sql`**, and rewrote its header to state exactly what it creates and that it is idempotent
+- **Renamed 5 vague migration filenames** to say what they do (`0013_indexes` → `0013_performance_indexes`, `0015_password_set` → `0015_users_password_set_claim_flag`, etc.)
+- **New `supabase/README.md`** — fresh setup (schema → Realtime → first leadership user → email/SMTP) vs. upgrading an existing database, with the first-user SQL written out and a warning to read `0017` before running it
+- **New `.env.example`** — every variable explained, where to get it, and which are public vs. server-only; plus a `!.env.example` exception in `.gitignore`, since the `.env.*` rule would otherwise hide it
+- **Rewrote root `README.md`** — what MeetUp is, the 🌐/🔒 split and why it makes the app safe, 5-step local setup, deployment (including the Deployment Protection trap that silently kills recordings), and the four rules for anyone changing the code
 
----
+### 8.1 Overdue status transition — **HIGH**
+**What:** a scheduled job that flips `open` → `overdue` when `deadline < now()`, and `overdue` → `open` when an approved extension moves the deadline back into the future.
+**Why:** **nothing in the codebase sets `status = 'overdue'` today.** No cron, no trigger, no route handler writes it. `TaskCard` computes `isDeadlinePast` for colour only; the DB row stays `open` forever — so `overdue_count` reads **0** on the Dashboard, on My Performance, and on the leadership Score Bands. Half the scoring layer currently reports nothing.
+**Where:** Supabase `pg_cron`, or Vercel Cron hitting a new route handler; `tasks.status`; the approve branch of `PATCH /api/extensions/[id]/decide`.
+**Done when:** a task past its deadline shows `overdue` in the DB, the dashboard count is non-zero, and approving an extension into the future returns it to `open`.
 
-## 9. Repository & architecture
+### 8.2 Supabase email + domain setup — **HIGH**
+**What:** finish the three unfinished Mailjet/Supabase items.
+**Why:** together they block a real employee from claiming an account from a cold inbox.
+**Where:** Supabase Auth settings + the domain registrar.
+- The **"Confirm signup" template still sends a link, not the OTP code** the `/claim` flow expects.
+- **Site URL still points at localhost.**
+- **Domain-auth DNS TXT records** not yet added.
+**Done when:** a brand-new employee receives a 6-digit code and completes `/claim` end to end.
 
-**One GitHub repo.** Supabase migrations versioned in the same repo. **Interim deployment:** the `backend/` FastAPI service runs on **Render (free)**; the `frontend/` Next.js app runs on **Vercel**. **Target deployment (§0):** frontend on Vercel, all backend logic as serverless functions + Supabase (RLS/views/RPC) — the standalone FastAPI service goes away.
+### 8.3 Ideas feed — MEDIUM
+**What:** a standalone ideas view with company filter, date filter, and keyword search.
+**Why:** recent ideas render inline on `/idea` only. Ideas go in but are hard to get back out.
+**Where:** new `app/(app)/ideas/page.tsx`; extend `GET /api/ideas` with filter params; `tags` is a `text[]`, searchable with the `@>` operator.
+**Done when:** any idea from any company can be found by tag, company, date, or keyword.
 
-```
-meetup/
-├── backend/                  # FastAPI (Python)
-│   ├── main.py
-│   ├── routers/
-│   │   ├── auth.py           # OTP login, session checks
-│   │   ├── recordings.py     # audio upload + pipeline job
-│   │   ├── tasks.py          # task CRUD, status, dashboard
-│   │   ├── extensions.py     # NEW: request/approve/deny deadline extensions
-│   │   ├── meetings.py       # meeting records + MoM
-│   │   ├── ideas.py          # idea save + retrieval
-│   │   └── performance.py    # NEW: My Performance + Org Performance (leadership)
-│   ├── services/
-│   │   ├── assemblyai.py     # transcription (AssemblyAI Hinglish)
-│   │   ├── claude.py         # 3 extraction prompts
-│   │   └── supabase.py       # db client (service role)
-│   ├── models/               # Pydantic schemas
-│   └── requirements.txt
-│
-├── frontend/                 # Next.js
-│   ├── app/
-│   │   ├── page.tsx          # home dashboard
-│   │   ├── delegate/         # task delegation flow
-│   │   ├── meeting/          # meeting recording flow
-│   │   ├── idea/             # idea capture flow
-│   │   ├── received/         # Tasks Received (standalone)
-│   │   ├── allocated/        # Tasks Allocated (standalone)
-│   │   ├── meetings/         # past MoMs (standalone)
-│   │   ├── performance/      # NEW: My Performance
-│   │   └── org-performance/  # NEW: leadership-only dashboard
-│   ├── components/
-│   │   ├── RecordButton.tsx
-│   │   ├── ReviewForm.tsx
-│   │   ├── TaskCard.tsx
-│   │   ├── ExtensionModal.tsx    # NEW
-│   │   ├── ScoreCard.tsx         # NEW
-│   │   └── Dashboard.tsx
-│   └── lib/
-│       └── supabase.ts       # client (anon key only)
-│
-└── supabase/
-    └── migrations/           # all schema SQL, versioned
-```
+### 8.4 GitHub CI — MEDIUM
+**What:** a workflow running lint + build on every push.
+**Why:** nothing currently catches a broken push; checks only run on a developer's machine.
+**Done when:** a PR with a type error fails before merge.
 
-**Key separation:** the Supabase **service-role key is server-only** — it bypasses RLS and must never reach the browser. In the serverless build (§9.1) it lives only in **Vercel server env vars**, used exclusively inside Next.js Route Handlers (server code). The **frontend/browser uses the anon key only.**
+### 8.5 Service-role key rotation — MEDIUM
+**What:** roll `SUPABASE_SERVICE_ROLE_KEY` and update Vercel + `.env.local`.
+**Why:** the key was exposed in a chat transcript during setup.
+**Done when:** the old key is invalid and production still works.
 
-### 9.1 Serverless build plan (Vercel + Supabase) — LOCKED 2026-07-24
+### 8.6 Real-device testing — MEDIUM
+**What:** test on a real Android (Chrome) and a real iPhone (Safari), including iOS mic-permission persistence.
+**Why:** the layout is responsive but has never run on physical hardware.
+**Done when:** all three recording flows complete on both devices.
 
-Replace the Python FastAPI backend with **Next.js Route Handlers inside the existing `frontend/` app**, and rebuild the recording pipeline as **submit + webhook**. One repo, one deploy (Vercel), Supabase unchanged. The frontend pages/components, Supabase schema/migrations, RLS/views, `recording_jobs` table, and the Claude prompts all **carry over unchanged**.
+### 8.7 New-task in-app notification — LOW
+**What:** toast + badge + light sound on the Dashboard when someone assigns you a task.
+**Why:** a new task is currently silent until you go looking for it.
+**Where:** rides the existing Realtime subscription on `tasks` — no new infrastructure.
+**Done when:** assigning a task to a logged-in colleague visibly alerts them without a refresh.
 
-**A. New file layout (all under `frontend/`):**
-```
-frontend/
-├── app/api/
-│   ├── auth/me/route.ts               GET   ← /auth/me
-│   ├── users/route.ts                 GET   ← /users?search
-│   ├── tasks/route.ts                 POST  ← /tasks (create)
-│   ├── tasks/dashboard/route.ts       GET   ← /tasks/dashboard
-│   ├── tasks/received/route.ts        GET   ← /tasks/received?page&search
-│   ├── tasks/allocated/route.ts       GET   ← /tasks/allocated?page&search
-│   ├── tasks/[id]/complete/route.ts   PATCH ← /tasks/{id}/complete
-│   ├── meetings/route.ts              GET   ← /meetings?page
-│   ├── meetings/[id]/route.ts         GET   ← /meetings/{id}
-│   ├── meetings/batch/route.ts        POST  ← /meetings/batch
-│   ├── ideas/route.ts                 GET+POST ← /ideas
-│   ├── extensions/route.ts            POST  ← /extensions
-│   ├── extensions/[id]/decide/route.ts PATCH ← /extensions/{id}/decide
-│   ├── performance/me/route.ts        GET   ← /performance/me
-│   ├── performance/org/route.ts       GET   ← /performance/org (leadership)
-│   ├── performance/extensions/my/route.ts GET ← /performance/extensions/my
-│   ├── recordings/upload/route.ts     POST  ← submit to AssemblyAI + webhook
-│   └── recordings/webhook/route.ts    POST  ← AssemblyAI callback → Claude → DB  (NOT user-authed)
-├── lib/server/                        (server-only; never imported by client components)
-│   ├── supabaseAdmin.ts   service-role client
-│   ├── auth.ts            requireUser(req): verify Bearer JWT → users row (+company+designation)
-│   ├── claude.ts          port of extraction.py (3 prompts + IST now-context)
-│   └── assemblyai.ts      submit-with-webhook + webhook-signature verify
-└── lib/api.ts             BASE → '' (same origin); function signatures unchanged
-```
+### 8.8 Meeting-recording robustness — LOW
+**What:** review behaviour for long meetings near the ~30-minute cap.
+**Why:** untested at the upper bound; Vercel function duration and AssemblyAI turnaround both scale with length.
+**Done when:** a 30-minute recording completes or fails with a clear message — never hangs.
 
-**B. The 19 endpoints port 1:1** from the Python routers (auth·users·tasks·meetings·ideas·extensions·performance). Same request/response shapes as `models/schemas.py`, so the frontend's `lib/api.ts` signatures and every page/component stay the same. Each handler: `requireUser()` → scope the Supabase query to that user → return JSON. **Security stays app-enforced in the handler** (service-role bypasses RLS — same model the FastAPI backend uses today; noted in §12). Leadership endpoints (`/performance/org`, and the §7.5 dashboard reads) check the verified `capability_tier` from `requireUser()`.
+### 8.9 🚪 THE PILOT — the gate on everything above and after
+**What:** run v1.0 with 2–3 real people, daily, and measure extraction accuracy on real recordings.
+**Why:** §7.4 — the app is proven to work, not proven to be right.
 
-**C. Recording pipeline — the one real redesign (poll-and-wait → submit+webhook):**
-1. `POST /api/recordings/upload` (user-authed, < 2s): validate `job_type`; upload the audio Blob to Supabase Storage `audio` bucket; insert a `recording_jobs` row (`status = processing`); create a signed URL; call AssemblyAI **`POST /v2/transcript`** with `audio_url`, `language_detection` (see §16/objective ACCURATE), **`webhook_url = <SITE_URL>/api/recordings/webhook`**, and a webhook auth secret; save AssemblyAI's transcript id on the job row; return the job id.
-2. AssemblyAI transcribes **on its own servers**, then POSTs to our webhook.
-3. `POST /api/recordings/webhook` (authenticated by the **AssemblyAI webhook secret**, not a user JWT): verify the secret; find the `recording_jobs` row by transcript id; if transcript empty → set `status = error`, "No speech detected"; else run the correct Claude extraction by `job_type` (task/meeting/idea); write the result JSON on the job row; set `status = complete`. **Idempotent** — a duplicate callback for an already-complete job is ignored.
-4. Frontend picks up the result via the existing **Supabase Realtime** subscription on `recording_jobs`. No change.
+**Order of work:**
+1. Fix **8.1** and **8.2** first — the pilot is meaningless without working overdue counts and a working claim email.
+2. Seed pilot accounts (founder's office + 1–2 team leads) via `/admin/employees`; have each person claim at `/claim` from a cold inbox.
+3. Use it daily for real work. No synthetic clips.
+4. Measure accuracy. Agree the definition **before** starting: deadline parsed correctly **and** doer matched to the right user **and** description sensible.
+5. Two full rounds of bug fixes from feedback.
+6. Verify the leadership gate by hand — log in as a standard user and hit `/api/performance/org` and `/api/leadership/tasks` directly. Both must return **403 from the server**, not merely hide in the UI.
+7. Decide the WhatsApp provider (Meta Cloud API / AiSensy / Twilio) and **submit templates to Meta** — approval takes 3–7 days and must not block v2.
 
-**D. Env vars (Vercel):**
-- **Server-only (no `NEXT_PUBLIC_`):** `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `ASSEMBLYAI_API_KEY`, `ASSEMBLYAI_WEBHOOK_SECRET`, `SITE_URL` (public Vercel URL for the webhook).
-- **Public:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
-- **Removed:** `NEXT_PUBLIC_BACKEND_URL` (API is now same-origin) and CORS entirely (same origin).
+**Targets:** deadline parsed correctly **90%+** · doer matched **85%+** · 2-min clip returns its result in **under ~30s**.
 
-**E. Order of work (test each step before the next):**
-1. Shared helpers: `supabaseAdmin`, `auth`, `claude`, `assemblyai`.
-2. Read paths first: `/api/auth/me`, `/api/users`, `/api/tasks/dashboard` → confirm login + dashboard work.
-3. Task flow: received / allocated / create / complete.
-4. Meetings, ideas, extensions, performance (me / org / extensions).
-5. Recording pipeline (upload + webhook) — tested on a **deployed Vercel preview** (the webhook needs a public URL AssemblyAI can reach).
-6. Switch `lib/api.ts` to same-origin; drop `NEXT_PUBLIC_BACKEND_URL`.
-7. Retire `backend/` — stop deploying it (kept in git history).
-
-**F. Known caveats (flagged, decided during build):**
-- **Local dev + webhook:** AssemblyAI cannot call `localhost`. Test the recording pipeline on a Vercel **preview deployment** (or a tunnel). All non-recording endpoints work fine locally.
-- **Next.js 16.2.9 breaking changes** (`frontend/AGENTS.md`): **read `node_modules/next/dist/docs/` before writing any route handler** — Route Handler conventions may differ from training data.
-- **Runtime:** route handlers using the service-role SDK + Anthropic SDK run on the **Node runtime**, not Edge.
-- **Vercel function duration:** webhook runs Claude (~10s) — inside Vercel's 60s default (Pro extends to 300s). Upload < 2s.
+**Gate — v2 is blocked until every box passes:**
+- [ ] Extraction accuracy above **90%** on real pilot recordings
+- [ ] Schema stable — no structural changes needed after 2 weeks of real use
+- [ ] Pilot users actively using the tool, **not reverting to WhatsApp**
+- [ ] A standard-tier user is **rejected by the server** on every leadership endpoint
+- [ ] Overdue status actually transitions, so overdue counts are real
+- [ ] Works on a real Android and a real iPhone
+- [ ] WhatsApp templates submitted to Meta
 
 ---
 
-## 10. Phase 0 — Project setup
+## 9. Future releases ⬜
 
-**Week 1 · Foundations.** ~8 weeks total to a usable product in the founder's hands.
+**`v2` — org-wide rollout & automation.** WhatsApp notifications (new task, 24h deadline reminder, overdue alert, completion, extension decisions); a **Pending Actions** screen where a human can edit or cancel any system-initiated message **before** it goes out — no autonomous sends, ever; Google Calendar events from meeting MoMs; MoM export to the `_BRAIN/MTG` Drive folder; a read-only Google Sheets mirror; bulk user seeding; self-signup with leadership designations excluded from the dropdown and rejected server-side. **No PII in WhatsApp** — messages stay generic ("You have a new task — open MeetUp to view") and deep-link into the app.
 
-### Build instructions
-
-1. **Build the pipeline as clean modules from scratch** (not cloned from CoachUp): the recording UI, AssemblyAI client, and LLM extraction call as reusable modules in the MeetUp repo.
-2. **Run the consolidated schema** in the new Supabase project's SQL Editor: paste and run `supabase/run_all_migrations.sql` in one shot. It creates all **8 tables** (`companies`, `designations`, `users`, `tasks`, `task_extensions`, `meetings`, `ideas`, plus the `recording_jobs` async-queue table), the `user_performance` view, the `updated_at` trigger, RLS on every table, the performance indexes, the private `audio` storage bucket, and seeds companies + designations. Includes the additions: `tasks.completed_at`, `tasks.original_deadline`, the full `task_extensions` table, and `designations.capability_tier`.
-3. **Enable RLS on every table immediately**, before any data is written. Add the `updated_at` Postgres trigger on `tasks`.
-4. **Create the `user_performance` view** (on-time %, overdue count, totals, avg days-to-complete) with RLS: own-row for standard, all-rows for leadership tier.
-5. **Scaffold FastAPI + Next.js on Railway.** Wire GitHub CI so lint + build pass on every push.
-6. **Supabase Auth: email + OTP login** for a test user. Verify the frontend uses the **anon key**, never the service-role key.
-7. **Seed script:** create companies (Ecoste/Lamora/Metamask), a couple of designations including one `leadership`-tier, and the founder account **seeded with the leadership tier**. Confirm no self-service path can set a leadership designation.
-
-### 🚪 EXIT GATE — Phase 0
-- [ ] Engineer can log in via OTP.
-- [ ] All 7 tables exist with RLS enabled and correct foreign keys.
-- [ ] `tasks` has `completed_at` + `original_deadline`; `task_extensions` exists; `designations.capability_tier` exists.
-- [ ] `user_performance` view exists and returns correct shape.
-- [ ] Railway deploys successfully from GitHub on push.
-- [ ] Founder account is seeded with the leadership tier; no signup path can self-assign it.
-
-### ✅ HUMAN CHECKPOINT
-Manually try to log in. Open the Supabase table editor and confirm all 7 tables + the view. Confirm the frontend bundle does **not** contain the service-role key.
+**`v3` — AI calling.** VAPI.ai follow-up calls on overdue tasks, **always** routed through the same Pending Actions approval screen. Call transcripts stored in Supabase for audit. Leadership tier only.
 
 ---
 
-## 11. Phase 1A — The AI pipeline
+## 10. Locked decisions
 
-**Weeks 2–3 · The core product.** This is where the most care goes.
-
-### Build instructions
-
-1. **Mic recording UI** (`RecordButton.tsx`): tap to start, tap to stop, waveform animation, red button + timer while recording. Handle browser mic permission and the **WebM (Chrome) / MP4 (Safari)** format difference.
-2. **Async upload** to FastAPI → AssemblyAI (Hinglish model) → return transcript. Upload returns a **job ID immediately**; backend processes in background; frontend listens via **Supabase Realtime** on the row. Show a clear "Analysing your recording…" state during the 15–30s wait.
-3. **Three Claude extraction prompts**, each with a strict JSON output schema:
-   - **Task** → single object: `{ doer_name, description, deadline, report_to_name }`.
-   - **Meeting** → `{ mom_summary, tasks: [ {doer_name, description, deadline, report_to_name}, ... ] }`.
-   - **Idea** → `{ summary, tags: [...] }`.
-4. **Review form** (`ReviewForm.tsx`) with auto-fill. Doer + Report To are **searchable dropdowns from `users`** showing the **Company** column, pre-set to Claude's best guess and correctable. Assignor is the logged-in user (locked).
-5. **Missing-field gate:** if any of the four required fields (Doer, Description, Deadline, Report To) came back empty, highlight it red and **lock submit** until filled.
-6. **On submit:** capture `original_deadline = deadline` at creation. For meetings, save each task as its own row linked via `meeting_id`, and run the missing-field check per task; the assignor reviews all tasks together in a scrollable list and submits the batch at once.
-
-### 🚪 EXIT GATE — Phase 1A
-- [ ] All 3 flows produce correct JSON from Hindi / English / Hinglish audio.
-- [ ] Extraction accuracy above **85%** on 20 test recordings.
-- [ ] Missing-field UI fires correctly when deadline or doer is absent.
-- [ ] `original_deadline` is captured at creation and equals `deadline` initially.
-
-### ✅ HUMAN CHECKPOINT
-Record several real Hinglish clips yourself. Confirm the dropdowns disambiguate same-name people by company. Confirm a meeting recording produces multiple correct task rows linked to one meeting.
-
-> **Phase 1 deliberately excludes:** WhatsApp notifications. The system stays fully in-app until extraction accuracy is proven.
-
----
-
-## 12. Phase 1B — Views, dashboard, scoring
-
-**Weeks 4–5 · Making it usable.**
-
-### Build instructions
-
-1. **Tasks Received & Tasks Allocated** as **standalone top-level views** (not nested in recording flows). Each shows all tasks regardless of source, with a `from meeting` / `direct` tag. **Server-side pagination + keyword search from the start** (a team lead may have 50+ open tasks at rollout). Status colours: teal = open/on-track, red = overdue, green = completed.
-2. **Meetings view:** list of past meetings, each showing its MoM summary + count of tasks generated; tap to read full minutes.
-3. **Mark task complete:** button on each card → sets `status = completed`, `completed_at = now()`; doer can optionally add a short completion note.
-4. **Deadline renegotiation UI** (`ExtensionModal.tsx`):
-   - Doer: "Request more time" on a received open task → reason + proposed deadline → creates `task_extensions` row (`requested`). Card shows "Extension requested".
-   - Assignor: pending-extension badge on Tasks Allocated → Approve/Deny. Approve moves `tasks.deadline`, records `decided_by`/`decided_at`, and un-overdues the task if the new deadline is in the future.
-5. **My Performance view** (`ScoreCard.tsx` + `performance/`): two metric cards (on-time % + overdue count) read from the `user_performance` view, plus totals, avg days-to-complete, and the user's extension history.
-6. **Ideas view:** universal feed, filter by company + date, keyword search. (Ideas with no retrieval surface are useless.)
-7. **Home dashboard:** four live count cards (given-open, received, completed, overdue) via Supabase Realtime — **no polling.**
-8. **Mobile-responsive layout.** Test on a real Android (Chrome) and a real iPhone (Safari), including **mic permission persistence on iOS.**
-
-### 🚪 EXIT GATE — Phase 1B
-- [ ] Dashboard counts accurate and update in real time.
-- [ ] **RLS confirmed:** a user cannot see another company's tasks (test with a non-admin user).
-- [ ] My Performance shows correct on-time % and overdue count; an **approved** extension visibly protects the score.
-- [ ] Extension request → approve/deny flow works end to end with audit fields populated.
-- [ ] Works correctly on real mobile browsers.
-
-### ✅ HUMAN CHECKPOINT
-Create a task, miss the deadline (so it goes overdue), request + approve an extension, complete it, and confirm the doer's on-time % was **not** penalised. Then complete a different task late with no extension and confirm it **was** counted against the score. This proves the fairness mechanism.
-
----
-
-## 13. Phase 1C — Pilot & stabilise
-
-**Weeks 6–8 · Real-world proof.**
-
-### Build instructions
-
-1. **Seed pilot accounts:** founder's office + 1–2 team leads. Run real meetings and real task delegations through the system **daily.**
-2. **Minimal leadership dashboard** (`org-performance/` + `performance.py`): the Org Performance view, gated on `capability_tier = 'leadership'`, searchable by name/email, showing on-time %, overdue count, task volume per employee across all three companies. **Scores + counts only.** Backend RLS + conditional frontend rendering both enforced.
-3. **Measure extraction accuracy** on real recordings — especially deadline parsing, doer identification, and Hinglish handling.
-4. **Two full rounds of bug fixes** from pilot feedback.
-5. **Build error states:** what the user sees if AssemblyAI fails, if Claude returns bad JSON, or if upload times out. User can re-record or edit a raw transcript manually.
-6. **Submit WhatsApp message templates to Meta now (Week 6)** — approval takes 3–7 days and can be rejected; must not block Phase 2.
-7. **Decide the WhatsApp provider** (Meta Cloud API / AiSensy / Twilio) during this phase.
-
-### 🚪 EXIT GATE — Phase 1C — **HARD GATE (Phase 2 is BLOCKED until all pass)**
-- [ ] Extraction accuracy above **90%** on real pilot recordings.
-- [ ] Schema stable — **no structural changes** needed after 2 weeks of real use.
-- [ ] Pilot users actively using the tool, **not reverting to WhatsApp.**
-- [ ] WhatsApp templates submitted to Meta for approval.
-- [ ] Leadership dashboard verified: a standard-tier user **cannot** access Org Performance (tested via direct API call, not just hidden UI).
-
-### ✅ HUMAN CHECKPOINT
-You personally try to reach the Org Performance endpoint while logged in as a standard user — it must be **rejected by the backend**, not merely hidden. Confirm the founder account sees all three companies' scores and search works by name and email.
-
-> **Phase 1 deliberately does NOT include:** WhatsApp notifications · calendar automation · Google Drive export · Sheets mirror · AI calling agent · any autonomous action. Every record is confirmed by the person who hits submit. The reason is deliberate: validate AI accuracy on a small supervised pilot before the system is ever trusted to message or call 200–300 people unsupervised.
-
----
-
-## 14. Phase 2 — Org-wide rollout & automation
-
-**Weeks 9–15 · ~7 weeks.** Detailed planning happens **only after Phase 1's hard gate is cleared.** Summarised here for context.
-
-### Scope
-
-1. **WhatsApp layer:** task notification on creation; deadline reminder 24h before; overdue alert; completion notification to the report-to person. **Also: extension-decision notifications** (doer notified on approve/deny; report-to/assignor kept in the loop).
-2. **Pending Actions screen:** an in-app review surface where a person can **edit or cancel any system-initiated message before it goes out.** No autonomous sends — ever.
-3. **Calendar & Brain:** Google Calendar events from meeting MoMs; MoM export to `_BRAIN/MTG` Drive folder; a read-only Google Sheets mirror for non-technical browsing.
-4. **Full rollout:** bulk user seeding across all three companies; **designation-tier feature gating** (the broader version — multiple tiers, more gated features, built on the `capability_tier` foundation from Phase 1); formal sunset of WhatsApp for task delegation.
-5. **Self-signup (deferred from Phase 1):** the name / company (dropdown) / email / phone / designation form. **Crucially: the designation dropdown excludes all leadership-tier designations, and the backend rejects any attempt to self-assign a leadership tier.** Leadership remains assigned by admin only.
-6. **(Optional, decide explicitly) leadership drill-down:** if wanted, allow the leadership tier to view individual task content — a deliberate privacy decision, not a default.
-
-### Security carried forward
-- No PII in WhatsApp: keep messages generic ("You have a new task — open MeetUp to view"); deep-link to the app; never paste full task text into WhatsApp.
-
----
-
-## 15. Phase 3 — AI calling & full autonomy
-
-**Weeks 16–19 · ~3–4 weeks.** Built on everything proven before it.
-
-### Scope
-
-1. **VAPI.ai calling agent:** AI follow-up calls when a task is overdue — **always gated through the same Pending Actions approval screen** built in Phase 2. Never autonomous.
-2. **Call transcripts stored in Supabase** for a full audit trail.
-3. **Leadership tier only:** AI-drafted outbound messages and more proactive calendar control — not rolled out to everyone. (Uses the same `capability_tier` gate.)
-
-> **Realistic timeline to full Phase 3:** ≈ 19 weeks. Usable product in the founder's hands after Phase 1: ≈ 8 weeks from first commit.
-
----
-
-## 16. Success metrics
-
-Three layers: technical accuracy proves the AI works; adoption proves people use it; business outcome proves it solves the real problem.
-
-### Technical (pilot)
-- Deadline extracted correctly — target **90%+**
-- Doer matched to correct user — target **85%+**
-- Hinglish transcription accuracy — test 20 clips before going wider
-- Transcription latency — under **30s** for 2-min audio
-
-### Adoption (post-rollout)
-- Weekly active users — target **60%+** of registered in month 1
-- Tasks created per week — should trend up, not plateau
-- Task completion rate — are open tasks getting closed?
-- Ideas captured per week — is the habit forming?
-
-### Business (60–90 days)
-- Fewer "I forgot" / "nobody told me" incidents
-- Avg days from task creation to completion — going down?
-- MoMs written vs meetings held — ratio improving?
-- % of tasks completed before deadline
-
-### New (scoring layer)
-- **On-time completion rate trend** per team — improving over the pilot?
-- **Extension-request rate** — are deadlines being set realistically? (A flood of extensions = deadlines too aggressive; near-zero with high overdue = mechanism not being used.)
-
-### Metric to deliberately avoid
-Do **not** measure success by the raw number of ideas captured — it measures activity, not value. What matters is whether ideas get acted on (a Phase 3 conversation).
-
-### Define "extraction accuracy" before the pilot
-Agree the exact definition before testing: deadline parsed correctly **+** doer matched to the right user **+** task description sensible. Without a clear definition the pilot has no pass/fail.
-
----
-
-## 17. Locked decisions
-
-The developer does not need to ask about any of these.
+These do not get re-litigated. If one needs to change, write the change into §8 first.
 
 | Decision | Answer |
-|----------|--------|
-| Where do task lists live? | Standalone top-level views (Tasks Received / Allocated), not nested in recording flows. Show all tasks from both sources. |
-| How do you tell a meeting task apart? | Each card shows a `direct` / `from meeting` tag driven by the existing `source` field. No schema change. |
-| Where do past MoMs live? | Standalone Meetings view (built Phase 1B). |
+|---|---|
+| Hosting | **Vercel + Supabase, fully serverless.** No always-on server. |
+| Backend | **Next.js Route Handlers under `app/api`.** One repo, one deploy. |
+| Repo layout | **The repo root is the app** — no `frontend/` folder, because the same project holds the backend. Vercel Root Directory = `.` |
+| Which LLM | **Claude API only** (`claude-opus-4-8`). No OpenAI key anywhere — not in env, not in Vercel, not in code. |
+| Transcription | AssemblyAI, submit-with-webhook, language detection on. |
+| Auth | **One-time claim (OTP once) + email/password after.** |
+| Company / designation IDs | Small human-readable IDs: companies `1001/1002/1003`, designations `'00'` (CEO) / `'01'` (Employee). Everything else stays UUID. |
+| Designations | Exactly **two, global**: CEO (leadership) and Employee (standard). |
 | Who is the assignor? | Always the logged-in user. No "on behalf of" mode. |
-| How is the doer selected? | Dropdown of all employees; Claude pre-fills its best guess; assignor corrects if wrong. |
-| What shows in the dropdown? | Name + Company (disambiguates same-name people across companies). |
-| What does "Report To" mean? | The person the doer reports completion to. In Phase 2 they also get a done-notification. |
-| Which fields are mandatory? | Doer, Task Description, Deadline, Report To. Submit locked until all four are filled. |
-| Who sees which tasks? | Each user sees only their own received/allocated tasks. Enforced by RLS in Postgres. |
-| Who sees ideas? | All employees, all companies. Universal feed with a company filter. |
-| Is idea retrieval in Phase 1? | Yes — Phase 1B. |
-| What auth method? | Email + OTP via Supabase Auth. |
-| Where does recording audio go? | Supabase Storage, signed URLs, 90-day retention. Never public URLs. |
-| What happens when someone leaves? | `is_active = false` (soft delete). Their tasks remain intact — no cascade failures. |
-| When does WhatsApp approval start? | Phase 1C (Week 6) — Meta approval takes 3–7 days. |
-| Max recording length? | ~5 min for task delegation, ~30 min for meetings. UI enforces the limit. |
-| What if extraction fails? | Clear error; user can re-record or edit a raw transcript manually. Error states built in Phase 1C. |
-| **Which LLM runs extraction?** | **Claude API only. OpenAI is not used — no OpenAI key anywhere in the stack (backend, env, or Railway).** |
-| **How is a doer scored?** | **Derived live from `tasks` (never stored). Two metrics: on-time completion % + current overdue count.** |
-| **What protects a doer's score from a real bottleneck?** | **An approved deadline extension. The score judges against the current deadline; an approved extension moves it, so no penalty. Approval (not the claim) is what protects.** |
-| **Who can see all employees' scores?** | **Only `capability_tier = 'leadership'`. Searchable by name/email.** |
-| **What does the leadership (CEO) dashboard show?** | **(§7.5) (a) Org-wide task register — every task, all companies, any status — with assigner, doer, deadline, assigned-date, status; filter by assigned-date range and deadline range; quick filters "deadline today" / "assigned today"; email search. (b) A "today" snapshot: assigned / completed / pending counts. (c) Colour-banded scoring: 🟢 ≥95%, 🟡 90–<95%, 🔴 <90% — click a band to list the staff in it, search by email. This supersedes the earlier "scores + counts only" limit.** |
-| **How is leadership access granted?** | **By seeding/admin only — never self-selected. Signup dropdown excludes leadership tiers; backend rejects self-assignment; RLS reads the verified stored tier. Self-claiming CEO is structurally impossible.** |
-| **What are the product's non-negotiable objectives?** | **Accurate, reliable, fast — in that priority when they conflict. Defined concretely in §0.** |
-| **What is the target hosting architecture?** | **Fully serverless on Vercel + Supabase — no always-on server. Recording pipeline uses submit-plus-webhook; CRUD moves into Supabase (RLS/views/RPC). See §0.** |
-| **Is there an interim always-on server?** | **No (decided 2026-07-24). Railway and a brief Render bridge were both dropped before carrying traffic. We build directly on the serverless target. The FastAPI `backend/` is superseded and reimplemented as serverless functions.** |
-| **What order do we build/ship in?** | **Build the serverless app (Vercel + Supabase) → deploy & run the 2–3 person pilot on it → prove accuracy (Phase 1C hard gate) before org-wide rollout.** |
+| Mandatory task fields | Doer, Description, Deadline, Report To. Submit locked until all four are filled. |
+| What the dropdown shows | Name + Company — that's what disambiguates same-name people. |
+| Who sees ideas? | All employees, all companies. |
+| Who sees all scores? | Only `capability_tier = 'leadership'`, verified server-side on every leadership endpoint. |
+| What leadership sees in the register | **Metadata only** — assigner, doer, deadline, assigned date, status. Task description is deliberately hidden and the view never selects it. |
+| How leadership access is granted | Seeding or the leadership-gated admin endpoint only. Never self-service. RLS blocks self-elevation. |
+| How a doer is scored | Derived live from `tasks`, never stored. On-time % + current overdue count. |
+| What protects a score | An **approved** extension, not a claimed one. It moves `deadline`; `original_deadline` never changes. |
+| Where audio lives | Private Supabase Storage `audio` bucket, signed URLs only. Never public. |
+| When someone leaves | `is_active = false`. Never hard-delete — their tasks stay intact. |
+| Max recording length | ~5 min for task delegation, ~30 min for meetings; enforced in the UI. |
+| Priority when objectives conflict | **Accurate > Reliable > Fast.** |
 
 ---
 
-## 18. Security checklist
+## 11. Glossary
 
-Read before writing any auth or data code.
-
-| Rule | How to implement |
-|------|------------------|
-| Never commit secrets | Git-ignored `.env` locally; Railway env vars in production. No exceptions, even for "temporary" keys. |
-| Service-role key: backend only | The Supabase service-role key bypasses all RLS. It lives only in Railway env vars. The frontend uses the anon key. |
-| RLS before any data | Enable RLS on all tables in Postgres before the pilot. Test with a non-admin user. Core rule: a user reads/writes only rows scoped to them (own tasks; own company where relevant). |
-| Leadership exception is scoped | The only cross-company read is the `user_performance` view, gated on the verified `capability_tier = 'leadership'`. Nothing else crosses company boundaries. |
-| No self-elevation | No signup/profile path can set a leadership-tier `designation_id`. Enforced in UI (dropdown filtered) **and** backend (request rejected) **and** RLS (reads verified tier). |
-| Audio access control | Store audio with RLS matching the meetings table. Signed URLs with expiry for playback — never public URLs. |
-| No PII in WhatsApp (Phase 2) | Keep messages generic ("You have a new task — open MeetUp to view"). Deep-link to the app; never paste full task text into WhatsApp. |
-
-### Immediate next steps (in order)
-1. Read this document fully — especially Locked Decisions (§17) and the access-control model (§7).
-2. Get Supabase credentials (secure channel — never email or WhatsApp).
-3. Build the pipeline as clean modules from scratch (not cloned from CoachUp).
-4. Run `supabase/run_all_migrations.sql` (all 8 tables + `updated_at` trigger + `user_performance` view + indexes + `audio` bucket + seed); RLS is enabled inside the script.
-5. Scaffold app + auth (Next.js + FastAPI on Railway, email-OTP, anon key in frontend).
-6. Build the three flows (Task Delegation → Meeting Recording → Idea, in that order). Test each with real Hinglish audio.
-7. Build views, dashboard, scoring, and the extension flow. Mobile-responsive from day one.
-8. Pilot, measure, fix. Clear the hard gate before any Phase 2 work.
-
-### The single most important principle
-Phase 1 proves the AI is trustworthy on a small, supervised group before the system is ever allowed to message or call people automatically. Get extraction accuracy right first. Everything else — WhatsApp, calendar, calling, autonomy — is built on that foundation. If the foundation is shaky, nothing above it can be trusted.
-
----
-
-## 19. Glossary
-
+- **MVP / v1.0** — the release described in §2–§7: voice capture → AI extraction → human confirm → routed record, plus views, scoring, extensions, leadership dashboard and admin.
 - **MoM** — Minutes of Meeting; Claude's structured summary of a recorded meeting.
 - **Doer / assignee** — the person responsible for completing a task.
-- **Assignor** — the person who created/delegated the task (always the logged-in recorder).
+- **Assignor** — the person who created the task (always the logged-in recorder).
 - **Report To** — the person the doer reports completion to.
-- **Hinglish** — the natural Hindi/English code-mix the organisation speaks.
+- **Hinglish** — the natural Hindi/English code-mix the organisation actually speaks.
 - **RLS** — Row-Level Security; access rules enforced inside Postgres.
 - **`capability_tier`** — the field on `designations` that gates feature access (`standard` / `leadership`).
-- **Derived score** — performance computed live from the `tasks` table, never stored as a column.
-- **Approved extension** — a deadline change approved by the assignor; the only thing that protects a doer's score from a genuine bottleneck.
-- **Hard gate** — a checkpoint that fully blocks the next phase until every criterion passes.
-
----
-
-*MeetUp — Build Plan. Confidential — Founder's Office. Phase 1 ≈ 8 weeks · Full Phase 3 ≈ 19 weeks.*
+- **Claim** — the one-time flow where a seeded employee proves their email via OTP and sets a password, linking `auth_id` and setting `password_set = true`.
+- **Derived score** — performance computed live from `tasks`, never stored as a column.
+- **Approved extension** — a deadline change approved by the assignor; the only thing that protects a doer's score.
+- **Gate** — a checkpoint that fully blocks the next release until every criterion passes.

@@ -1,6 +1,27 @@
 -- ============================================================
--- MeetUp — Combined migrations + seed
--- Paste this entire file into Supabase SQL Editor and click Run
+-- MeetUp — FULL DATABASE SETUP
+--
+-- Run this ONCE on a brand-new, empty Supabase project:
+--   Supabase dashboard -> SQL Editor -> New query
+--   -> paste this entire file -> Run
+--
+-- It creates everything the app needs:
+--   * 8 tables      companies, designations, users, tasks, task_extensions,
+--                   meetings, ideas, recording_jobs
+--   * 2 views       user_performance, leadership_task_register
+--   * RLS policies on every table
+--   * the updated_at trigger
+--   * performance indexes (sized for 200-300 users)
+--   * the private `audio` storage bucket
+--   * seed rows     3 companies (Ecoste/Lamora/Metamask)
+--                   2 designations (CEO = leadership, Employee = standard)
+--
+-- This is the consolidated form of migrations 0001-0018. Use THIS file for a
+-- fresh database. Use migrations/ only to upgrade a database that already has
+-- an older version of the schema. See README.md in this folder.
+--
+-- Safe to re-run: every statement is idempotent (create if not exists /
+-- on conflict do nothing).
 -- ============================================================
 
 

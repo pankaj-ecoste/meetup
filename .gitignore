@@ -1,38 +1,50 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg
-*.egg-info/
-dist/
-build/
-.eggs/
-.venv/
-venv/
-myvenv/
-env/
+# Dependencies
+node_modules/
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Next.js build output
+.next/
+/out/
+/build
+
+# Testing
+/coverage
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Env files — never commit; all live keys live in .env.local
 .env
+.env.*
 .env.local
 .env.*.local
+# ...except the placeholder template, which SHOULD be committed
+!.env.example
 # env backups taken during the Supabase migration (contain live keys)
 *.old-personal
-# TEMPORARY: backend/.env.example currently holds REAL keys (service-role,
-# OpenAI, AssemblyAI). Excluded so they don't leak into git history.
-# Once it's sanitised to placeholders, delete this line and commit it.
-.env.example
 
-# Node
-node_modules/
-.next/
-out/
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 .npm
 .eslintcache
+
+# Vercel
+.vercel
 
 # OS
 .DS_Store
 Thumbs.db
+*.pem
 
 # IDE
 .vscode/
