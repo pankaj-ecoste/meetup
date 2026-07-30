@@ -550,6 +550,33 @@ That measurement is the gate on everything after v1.0 (§8.9). It is deliberate:
 - [ ] Works on a real Android and a real iPhone
 - [ ] WhatsApp templates submitted to Meta
 
+### 8.10 Meeting recording upgrade: speakers, multi-assignee, perfect MoM, sharing — HIGH
+**What:** five changes to the meeting-recording flow, designed together in one conversation on 2026-07-30:
+1. **Speaker tagging** — AssemblyAI is already called with `speaker_labels: true`, but the webhook only ever fetched the flat merged `text`, discarding the `utterances` array (per-utterance `speaker` + `text`). Fetch it, build a `Speaker A: … / Speaker B: …` transcript, and have Claude best-guess a real name per label from context (self-intro, being addressed) — never from voice, since AssemblyAI has no voiceprint ID. The reviewer confirms/corrects each guess via a small mapping UI (reusing the existing user-dropdown component) before saving; confirmed names get substituted into the saved transcript.
+2. **Multi-assignee fan-out** — `doer_name` (string) → `doer_names` (string array) in the meeting-extraction output only. One utterance naming several people becomes several task-draft cards at review time (same description/deadline/report-to, different assignee each) — no schema change, since `tasks` is already one-row-per-assignee.
+3. **The "perfect MoM"** — one Claude call produces the whole thing, so there is never a second "regenerate the summary" call:
+   ```
+   Date & Time: <auto-filled from the recording's timestamp>
+   Attendees: <left blank — the recorder types names in on the review screen>
+
+   Summary
+   Key Discussion Points
+   Decisions Made        (omitted if nothing was decided)
+   Action Items          (omitted if the meeting produced zero tasks)
+   Next Steps            (the CTA line)
+   ```
+   Plain text, bullets, sections omitted rather than left empty. This single string is what's shown behind the "full summary" button too — there is no separate long-form recap.
+4. **Task add/remove in review** — `ReviewForm`'s meeting section had no way to add a task Claude missed or remove one it invented; add "+ Add task" and a per-card "Remove," independent of how many tasks (including zero) came out of extraction.
+5. **MoM sharing** — a multi-select recipient picker (any user, not leadership-only) on the same review screen, working even for a MoM-only meeting with no tasks. One "Confirm & Save" saves the meeting, its tasks, and the share together. New `meeting_shares` table (`meeting_id`, `shared_with_user_id`, `shared_by`, `created_at`) with its own RLS policy; `meetings` SELECT RLS widened so a recipient can read a meeting shared to them. Recipients see these in a new "Shared with me" view, kept separate from meetings they recorded themselves.
+
+**Why:** the meeting flow already runs diarization and throws the result away; a meeting with several speakers currently produces an MoM and task list with no sense of who said what, no way to delegate one task to a group, no way to fix a wrong extraction before saving, and no way to get the MoM in front of the one person (usually the CEO) who actually needs to see it without them separately opening `/meetings` and finding it themselves — which they can't, since meetings are recorder-only today.
+
+**Where:** `supabase/migrations/0019_meeting_shares.sql` + `supabase/setup.sql`; `lib/types.ts`; `lib/server/assemblyai.ts`; `lib/server/claude.ts` (`MEETING_SYSTEM`); `app/api/recordings/webhook/route.ts`; `app/api/meetings/batch/route.ts`; `app/api/meetings/[id]/route.ts`; new `app/api/meetings/shared/route.ts`; `lib/api.ts`; `components/ReviewForm.tsx`; new `app/(app)/meetings/shared/page.tsx` + `components/Nav.tsx`; `app/(app)/meetings/[id]/page.tsx` (summary button).
+
+**Done when:** a multi-speaker meeting recording produces a speaker-confirmable MoM in the format above; an utterance naming two people creates two task cards; the reviewer can add/remove a task card freely, including when zero were extracted; picking recipients and saving shares the MoM, and each recipient sees it under "Shared with me" without needing recorder access to the meeting; `npm run build` passes clean.
+
+**Caveat carried over from §7.2:** the AssemblyAI webhook cannot reach `localhost`, so this can only be verified end-to-end on a deployed Vercel URL, not local dev.
+
 ---
 
 ## 9. Future releases ⬜

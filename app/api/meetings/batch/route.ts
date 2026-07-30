@@ -14,6 +14,7 @@ type BatchBody = {
   audio_url?: string | null
   transcript?: string | null
   tasks?: BatchTask[]
+  shared_with?: string[]
 }
 
 // POST /api/meetings/batch — save a meeting record + all its tasks in one call.
@@ -70,6 +71,20 @@ export async function POST(request: Request) {
       const { data, error: tErr } = await admin.from('tasks').insert(taskRows).select('*')
       if (tErr) throw tErr
       tasks = data ?? []
+    }
+
+    // Sharing works even for a MoM-only meeting with zero tasks — dedupe
+    // and drop a self-share, which would be meaningless.
+    const recipients = [...new Set(body.shared_with ?? [])].filter((id) => id !== user.id)
+    if (recipients.length > 0) {
+      const { error: shareErr } = await admin.from('meeting_shares').insert(
+        recipients.map((shared_with_user_id) => ({
+          meeting_id: meeting.id,
+          shared_with_user_id,
+          shared_by: user.id,
+        })),
+      )
+      if (shareErr) throw shareErr
     }
 
     return Response.json({ meeting, tasks }, { status: 201 })

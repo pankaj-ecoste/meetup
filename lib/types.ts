@@ -68,6 +68,15 @@ export type MeetingResponse = {
   task_count: number
 }
 
+export type SharedMeetingRow = {
+  id: string
+  mom_summary?: string
+  created_at: string
+  task_count: number
+  shared_by_name: string
+  shared_at: string
+}
+
 export type IdeaResponse = {
   id: string
   recorded_by: string
@@ -161,9 +170,30 @@ export type ExtractedTask = {
   report_to_name?: string
 }
 
+// A meeting task can name more than one doer in a single utterance
+// ("Rahul and Priya, finish this by Friday") — doer_names carries all of
+// them; ReviewForm fans this out into one task-draft card per name.
+export type ExtractedMeetingTask = {
+  doer_names?: string[]
+  description: string
+  deadline?: string
+  report_to_name?: string
+}
+
+// One entry per anonymous AssemblyAI speaker label. guessed_name is
+// Claude's best-effort inference from what was actually said (self
+// introductions, being addressed by name) — never from voice, and null
+// when nothing in the transcript gives it away. The reviewer confirms or
+// corrects every label before saving.
+export type ExtractedSpeaker = {
+  label: string
+  guessed_name?: string | null
+}
+
 export type ExtractedMeeting = {
   mom_summary: string
-  tasks: ExtractedTask[]
+  speakers?: ExtractedSpeaker[]
+  tasks: ExtractedMeetingTask[]
 }
 
 export type ExtractedIdea = {

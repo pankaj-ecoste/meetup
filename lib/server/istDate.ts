@@ -19,3 +19,20 @@ export function istTodayBoundsUtc(): { start: string; end: string } {
   const endUtc = new Date(startUtc.getTime() + 24 * 60 * 60 * 1000)
   return { start: startUtc.toISOString(), end: endUtc.toISOString() }
 }
+
+const IST_MONTHS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+]
+
+/** e.g. "30 Jul 2026, 3:45 PM IST" — for the MoM's auto-filled Date & Time line. */
+export function formatIstDateTime(date: Date): string {
+  const ist = new Date(date.getTime() + IST_OFFSET_MS)
+  const day = ist.getUTCDate()
+  const month = IST_MONTHS[ist.getUTCMonth()]
+  const year = ist.getUTCFullYear()
+  const hours24 = ist.getUTCHours()
+  const minutes = String(ist.getUTCMinutes()).padStart(2, '0')
+  const ampm = hours24 >= 12 ? 'PM' : 'AM'
+  const hours12 = hours24 % 12 || 12
+  return `${day} ${month} ${year}, ${hours12}:${minutes} ${ampm} IST`
+}

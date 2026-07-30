@@ -22,7 +22,7 @@ That single file creates:
 
 | | |
 |---|---|
-| **8 tables** | `companies`, `designations`, `users`, `tasks`, `task_extensions`, `meetings`, `ideas`, `recording_jobs` |
+| **9 tables** | `companies`, `designations`, `users`, `tasks`, `task_extensions`, `meetings`, `ideas`, `recording_jobs`, `meeting_shares` |
 | **2 views** | `user_performance` (derived scores), `leadership_task_register` (org-wide task metadata) |
 | **RLS** | enabled with policies on every table |
 | **Trigger** | `updated_at` auto-maintained on `tasks` and `recording_jobs` |
@@ -109,6 +109,7 @@ Run only the numbered files newer than what your database already has, **in orde
 0017_small_ids_for_companies_and_designations.sql   companies.id -> 1001/1002/1003,
                                                     designations.id -> '00'/'01'
 0018_leadership_task_register_view.sql          org-wide register (no task descriptions)
+0019_meeting_shares.sql                         MoM sharing — meeting_shares table + widened meetings RLS
 ```
 
 **Read `0017` before running it.** It re-keys the primary keys of `companies` and `designations` and rebuilds every foreign key, index, RLS policy and view that depends on them. It runs inside a transaction, so it either fully succeeds or fully rolls back — but take a backup first.

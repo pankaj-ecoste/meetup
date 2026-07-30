@@ -33,6 +33,7 @@ export default function MeetingDetailPage() {
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [showSummary, setShowSummary] = useState(false)
 
   useEffect(() => {
     async function init() {
@@ -78,9 +79,18 @@ export default function MeetingDetailPage() {
       </div>
 
       {meeting.mom_summary && (
-        <div className="bg-white border border-gray-200 rounded-xl p-4 mb-6">
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Minutes of Meeting</h3>
-          <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{meeting.mom_summary}</p>
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-6">
+          <button
+            type="button"
+            onClick={() => setShowSummary(s => !s)}
+            className="w-full flex items-center justify-between px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-50 hover:bg-gray-100"
+          >
+            <span>Minutes of Meeting (tap for {showSummary ? 'less' : 'full summary'})</span>
+            <span>{showSummary ? '▲' : '▼'}</span>
+          </button>
+          {showSummary && (
+            <p className="px-4 py-3 text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{meeting.mom_summary}</p>
+          )}
         </div>
       )}
 

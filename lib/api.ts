@@ -54,6 +54,9 @@ export const api = {
   createMeetingBatch: (token: string, body: object) =>
     authFetch('/meetings/batch', token, { method: 'POST', body: JSON.stringify(body) }),
 
+  sharedMeetings: (token: string, page = 1) =>
+    authFetch(`/meetings/shared?page=${page}`, token),
+
   ideas: (token: string, page = 1) =>
     authFetch(`/ideas?page=${page}`, token),
 

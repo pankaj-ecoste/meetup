@@ -5,6 +5,7 @@ import type {
   UserBrief,
   ExtractedTask,
   ExtractedMeeting,
+  ExtractedMeetingTask,
   ExtractedIdea,
 } from '@/lib/types'
 import { api } from '@/lib/api'
@@ -134,12 +135,14 @@ function TaskDraftForm({
   users,
   submitted,
   index,
+  onRemove,
 }: {
   draft: TaskDraft
   onChange: (d: TaskDraft) => void
   users: UserBrief[]
   submitted: boolean
   index?: number
+  onRemove?: () => void
 }) {
   const missing = {
     description: !draft.description.trim(),
@@ -152,7 +155,18 @@ function TaskDraftForm({
   return (
     <div className={`space-y-3 ${index !== undefined ? 'border border-gray-200 rounded-xl p-4' : ''}`}>
       {index !== undefined && (
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Task {index + 1}</p>
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Task {index + 1}</p>
+          {onRemove && (
+            <button
+              type="button"
+              onClick={onRemove}
+              className="text-xs text-red-500 hover:text-red-700 font-medium"
+            >
+              Remove
+            </button>
+          )}
+        </div>
       )}
 
       <div>
@@ -260,19 +274,61 @@ export default function ReviewForm({ jobType, result, transcript, users, onDone,
   const [taskDraft, setTaskDraft] = useState<TaskDraft>(initTask)
 
   // ── Meeting state ──
+  // One utterance can name several people at once ("Rahul and Priya, by
+  // Friday") — fan each doer_names entry out into its own task-draft card,
+  // sharing the same description/deadline/report-to, matching the fact that
+  // `tasks` is one row per assignee.
   const initMeetingTasks = (): TaskDraft[] => {
     const r = result as Partial<ExtractedMeeting>
-    return (r.tasks ?? []).map(t => ({
-      description: t.description ?? '',
-      assigneeId: bestMatch(t.doer_name, users),
-      deadline: parseDeadline(t.deadline),
-      reportToId: bestMatch(t.report_to_name, users),
-    }))
+    return (r.tasks ?? []).flatMap((t: ExtractedMeetingTask) => {
+      const names = t.doer_names && t.doer_names.length > 0 ? t.doer_names : [undefined]
+      return names.map(name => ({
+        description: t.description ?? '',
+        assigneeId: bestMatch(name, users),
+        deadline: parseDeadline(t.deadline),
+        reportToId: bestMatch(t.report_to_name, users),
+      }))
+    })
   }
   const [momSummary, setMomSummary] = useState(
     (result as Partial<ExtractedMeeting>).mom_summary?.trim() || transcript || ''
   )
   const [meetingTasks, setMeetingTasks] = useState<TaskDraft[]>(initMeetingTasks)
+
+  function addMeetingTask() {
+    setMeetingTasks(prev => [...prev, { description: '', assigneeId: '', deadline: '', reportToId: '' }])
+  }
+  function removeMeetingTask(index: number) {
+    setMeetingTasks(prev => prev.filter((_, i) => i !== index))
+  }
+
+  // Who's who: one row per AssemblyAI speaker label, pre-filled with
+  // Claude's best guess and correctable before saving.
+  type SpeakerMap = { label: string; assigneeId: string }
+  const [speakerMap, setSpeakerMap] = useState<SpeakerMap[]>(() =>
+    ((result as Partial<ExtractedMeeting>).speakers ?? []).map(s => ({
+      label: s.label,
+      assigneeId: bestMatch(s.guessed_name ?? undefined, users),
+    }))
+  )
+
+  // Who this MoM gets shared with — optional, any number of people.
+  const [sharedWith, setSharedWith] = useState<string[]>([])
+  function addRecipient(id: string) {
+    setSharedWith(prev => (prev.includes(id) ? prev : [...prev, id]))
+  }
+  function removeRecipient(id: string) {
+    setSharedWith(prev => prev.filter(x => x !== id))
+  }
+
+  // Replace every "Speaker A" style label with the confirmed real name, so
+  // the saved transcript/MoM read naturally instead of staying anonymous.
+  function substituteSpeakers(text: string): string {
+    return speakerMap.reduce((acc, s) => {
+      const name = users.find(u => u.id === s.assigneeId)?.name
+      return name ? acc.split(`Speaker ${s.label}`).join(name) : acc
+    }, text)
+  }
 
   // ── Idea state ──
   const [ideaSummary, setIdeaSummary] = useState(
@@ -328,8 +384,10 @@ export default function ReviewForm({ jobType, result, transcript, users, onDone,
           report_to_id: t.reportToId,
         }))
         await api.createMeetingBatch(token, {
-          mom_summary: momSummary,
+          mom_summary: substituteSpeakers(momSummary),
+          transcript: transcript ? substituteSpeakers(transcript) : undefined,
           tasks,
+          shared_with: sharedWith,
         })
         onDone()
       } catch (e) {
@@ -406,13 +464,64 @@ export default function ReviewForm({ jobType, result, transcript, users, onDone,
             <span>Meeting analysed — {meetingTasks.length} task{meetingTasks.length !== 1 ? 's' : ''} found.</span>
           </div>
 
+          {speakerMap.length > 0 && (
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">Who&apos;s who in this recording</label>
+              <p className="text-xs text-gray-400 -mt-1">
+                We detected {speakerMap.length} distinct speaker{speakerMap.length !== 1 ? 's' : ''}. Confirm or correct each one.
+              </p>
+              {speakerMap.map((s, i) => (
+                <div key={s.label} className="flex items-center gap-2">
+                  <span className="text-xs font-medium text-gray-500 w-20 flex-shrink-0">Speaker {s.label}</span>
+                  <div className="flex-1">
+                    <UserDropdown
+                      users={users}
+                      value={s.assigneeId}
+                      onChange={id => {
+                        const next = [...speakerMap]
+                        next[i] = { ...next[i], assigneeId: id }
+                        setSpeakerMap(next)
+                      }}
+                      placeholder="Who is this?"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Minutes of Meeting</label>
             <textarea
               value={momSummary}
               onChange={e => setMomSummary(e.target.value)}
-              rows={4}
+              rows={8}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Share with (optional)</label>
+            <div className="flex gap-2 mb-2 flex-wrap">
+              {sharedWith.map(id => {
+                const u = users.find(u => u.id === id)
+                if (!u) return null
+                return (
+                  <span
+                    key={id}
+                    className="text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full px-2.5 py-0.5 flex items-center gap-1"
+                  >
+                    {u.name}
+                    <button type="button" onClick={() => removeRecipient(id)} className="hover:text-red-500">×</button>
+                  </span>
+                )
+              })}
+            </div>
+            <UserDropdown
+              users={users.filter(u => !sharedWith.includes(u.id))}
+              value=""
+              onChange={addRecipient}
+              placeholder="Add a person to share this MoM with…"
             />
           </div>
 
@@ -427,11 +536,20 @@ export default function ReviewForm({ jobType, result, transcript, users, onDone,
                   next[i] = d
                   setMeetingTasks(next)
                 }}
+                onRemove={() => removeMeetingTask(i)}
                 users={users}
                 submitted={submitted}
               />
             ))}
           </div>
+
+          <button
+            type="button"
+            onClick={addMeetingTask}
+            className="w-full border border-dashed border-gray-300 rounded-xl py-2.5 text-sm text-indigo-600 font-medium hover:bg-indigo-50"
+          >
+            + Add task
+          </button>
         </>
       )}
 

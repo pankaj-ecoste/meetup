@@ -6,8 +6,8 @@
 --   -> paste this entire file -> Run
 --
 -- It creates everything the app needs:
---   * 8 tables      companies, designations, users, tasks, task_extensions,
---                   meetings, ideas, recording_jobs
+--   * 9 tables      companies, designations, users, tasks, task_extensions,
+--                   meetings, ideas, recording_jobs, meeting_shares
 --   * 2 views       user_performance, leadership_task_register
 --   * RLS policies on every table
 --   * the updated_at trigger
@@ -598,6 +598,60 @@ from tasks t
 join users ar on ar.id = t.assignor_id
 join users ae on ae.id = t.assignee_id
 join companies c on c.id = ae.company_id;
+
+-- ── 0019: meeting_shares — MoM sharing ────────────────────────
+-- A recorder can share a saved meeting's MoM with any number of other
+-- users. meetings' own SELECT policy is widened so a recipient can read
+-- the meeting they were shared, without needing to have recorded it.
+create table if not exists meeting_shares (
+  id                  uuid        primary key default gen_random_uuid(),
+  meeting_id          uuid        not null references meetings(id) on delete cascade,
+  shared_with_user_id uuid        not null references users(id),
+  shared_by           uuid        not null references users(id),
+  created_at          timestamptz not null default now()
+);
+
+create unique index if not exists idx_meeting_shares_unique
+  on meeting_shares (meeting_id, shared_with_user_id);
+create index if not exists idx_meeting_shares_recipient
+  on meeting_shares (shared_with_user_id);
+create index if not exists idx_meeting_shares_meeting
+  on meeting_shares (meeting_id);
+
+alter table meeting_shares enable row level security;
+
+create policy "meeting_shares_read_parties"
+  on meeting_shares for select
+  to authenticated
+  using (
+    shared_with_user_id = (select id from users where auth_id = auth.uid())
+    or shared_by = (select id from users where auth_id = auth.uid())
+  );
+
+create policy "meeting_shares_insert_recorder"
+  on meeting_shares for insert
+  to authenticated
+  with check (
+    shared_by = (select id from users where auth_id = auth.uid())
+    and exists (
+      select 1 from meetings m
+      where m.id = meeting_id
+        and m.recorded_by = (select id from users where auth_id = auth.uid())
+    )
+  );
+
+drop policy if exists "meetings_read_recorder" on meetings;
+create policy "meetings_read_recorder_or_shared"
+  on meetings for select
+  to authenticated
+  using (
+    recorded_by = (select id from users where auth_id = auth.uid())
+    or exists (
+      select 1 from meeting_shares ms
+      where ms.meeting_id = meetings.id
+        and ms.shared_with_user_id = (select id from users where auth_id = auth.uid())
+    )
+  );
 
 -- ── Founder user row ─────────────────────────────────────────
 -- Run this AFTER the founder logs in via OTP for the first time.

@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/server/supabaseAdmin'
-import { verifyWebhookSecret, getTranscriptText } from '@/lib/server/assemblyai'
+import { verifyWebhookSecret, getTranscript } from '@/lib/server/assemblyai'
 import { extractTask, extractMeeting, extractIdea } from '@/lib/server/claude'
+import { formatIstDateTime } from '@/lib/server/istDate'
 
 export const runtime = 'nodejs'
 
@@ -28,7 +29,7 @@ export async function POST(request: Request) {
   const admin = supabaseAdmin()
   const { data: job } = await admin
     .from('recording_jobs')
-    .select('id, job_type, status')
+    .select('id, job_type, status, created_at')
     .eq('transcript_id', transcriptId)
     .single()
 
@@ -48,22 +49,33 @@ export async function POST(request: Request) {
       return Response.json({ ok: true })
     }
 
-    const transcript = await getTranscriptText(transcriptId)
-    if (!transcript.trim()) {
+    const { text, taggedText } = await getTranscript(transcriptId)
+    if (!text.trim()) {
       await update({ status: 'error', transcript: '', error_msg: NO_SPEECH })
       return Response.json({ ok: true })
     }
 
+    const isMeeting = job.job_type === 'meeting'
+    // Meetings extract from the speaker-tagged transcript so Claude can
+    // reason about who said what; task/idea recordings don't need it.
+    const transcript = isMeeting ? taggedText : text
     await update({ status: 'extracting', transcript })
 
-    const result =
-      job.job_type === 'task_delegation'
-        ? await extractTask(transcript)
-        : job.job_type === 'meeting'
-          ? await extractMeeting(transcript)
+    if (isMeeting) {
+      const extracted = await extractMeeting(transcript)
+      // Date & Time and Attendees are prepended here rather than left to
+      // Claude: the job's own created_at is the real recording time, and
+      // Attendees must stay genuinely blank for the reviewer to fill in.
+      const header = `Date & Time: ${formatIstDateTime(new Date(job.created_at))}\nAttendees: \n\n`
+      const result = { ...extracted, mom_summary: header + extracted.mom_summary }
+      await update({ status: 'done', result })
+    } else {
+      const result =
+        job.job_type === 'task_delegation'
+          ? await extractTask(transcript)
           : await extractIdea(transcript)
-
-    await update({ status: 'done', result })
+      await update({ status: 'done', result })
+    }
     return Response.json({ ok: true })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Pipeline failed'

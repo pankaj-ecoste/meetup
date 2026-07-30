@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { href: '/received', label: 'Tasks Received', icon: '📥' },
   { href: '/allocated', label: 'Tasks Allocated', icon: '📤' },
   { href: '/meetings', label: 'Meetings', icon: '🗓' },
+  { href: '/meetings/shared', label: 'Shared with me', icon: '📨' },
   { href: '/performance', label: 'My Performance', icon: '📊' },
 ]
 

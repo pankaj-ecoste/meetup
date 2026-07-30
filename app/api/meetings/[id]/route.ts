@@ -16,9 +16,19 @@ export async function GET(
       .from('meetings')
       .select('*')
       .eq('id', id)
-      .eq('recorded_by', user.id)
       .single()
     if (!meeting) throw new HttpError(404, 'Meeting not found')
+
+    // Visible to the recorder, or to anyone the MoM was shared with.
+    if (meeting.recorded_by !== user.id) {
+      const { data: share } = await admin
+        .from('meeting_shares')
+        .select('id')
+        .eq('meeting_id', id)
+        .eq('shared_with_user_id', user.id)
+        .maybeSingle()
+      if (!share) throw new HttpError(404, 'Meeting not found')
+    }
 
     const { data: tasks, error: tErr } = await admin
       .from('tasks')

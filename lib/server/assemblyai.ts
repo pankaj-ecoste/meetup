@@ -74,11 +74,23 @@ export function verifyWebhookSecret(req: Request): boolean {
   return timingSafeEqual(a, b)
 }
 
+export type TranscriptResult = {
+  // Flat merged text — what task_delegation and idea extraction read.
+  text: string
+  // Speaker-tagged ("Speaker A: … \n Speaker B: …") — what meeting
+  // extraction reads instead, so Claude can reason about who said what.
+  // Falls back to the flat text when AssemblyAI returns no utterances
+  // (e.g. a single-speaker recording).
+  taggedText: string
+}
+
 /**
- * Fetch a finished transcript's plain text by id (used inside the webhook
- * once AssemblyAI signals completion). Returns '' when no speech was detected.
+ * Fetch a finished transcript by id (used inside the webhook once
+ * AssemblyAI signals completion). `text` is '' when no speech was detected.
+ * `utterances` (present because every submission sets speaker_labels: true)
+ * is what makes `taggedText` possible.
  */
-export async function getTranscriptText(transcriptId: string): Promise<string> {
+export async function getTranscript(transcriptId: string): Promise<TranscriptResult> {
   const res = await fetch(`${API_BASE}/transcript/${transcriptId}`, {
     headers: { authorization: apiKey() },
   })
@@ -90,11 +102,17 @@ export async function getTranscriptText(transcriptId: string): Promise<string> {
     status: string
     text?: string | null
     error?: string
+    utterances?: { speaker: string; text: string }[] | null
   }
   if (data.status === 'error') {
     throw new Error(`AssemblyAI transcription error: ${data.error}`)
   }
-  return data.text ?? ''
+  const text = data.text ?? ''
+  const taggedText =
+    data.utterances && data.utterances.length > 0
+      ? data.utterances.map((u) => `Speaker ${u.speaker}: ${u.text}`).join('\n')
+      : text
+  return { text, taggedText }
 }
 
 export { WEBHOOK_HEADER }

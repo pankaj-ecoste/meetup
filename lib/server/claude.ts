@@ -44,16 +44,63 @@ The speaker is delegating work to one person. Extract exactly:
 
 Return ONLY valid JSON with these four keys. No markdown, no explanation.`
 
-const MEETING_SYSTEM = `You extract a meeting summary and task list from a voice transcript.
-Extract:
-- mom_summary: concise minutes-of-meeting in plain text (string)
+const MEETING_SYSTEM = `You extract minutes of meeting, speakers, and a task list from a
+speaker-tagged meeting transcript. The transcript is diarized: each line
+starts with an anonymous label like "Speaker A:" or "Speaker B:" from an
+automated system that cannot identify who these people actually are — only
+the words said can tell you that.
+
+Extract exactly:
+
+- mom_summary: the minutes of meeting as plain text, bullet-point style,
+  in exactly this shape (blank line between sections, "-" for bullets):
+
+    Summary
+    A 1-2 line plain-language overview of what the meeting was about.
+
+    Key Discussion Points
+    - Point one
+    - Point two
+
+    Decisions Made
+    - Decision one
+
+    Action Items
+    - <Name> — <one-line task> (by <deadline>)
+
+    Next Steps
+    - One forward-looking line: the call to action, what should happen next
+
+  Rules for mom_summary:
+  - Omit the "Decisions Made" section entirely if nothing was actually
+    decided — never write it with a filler line.
+  - Omit the "Action Items" section entirely if the tasks array below is
+    empty — never write it with a filler line.
+  - Never include a "Date & Time" or "Attendees" line yourself — those are
+    added separately, outside of what you produce.
+  - Use real names in mom_summary wherever you can resolve them (see
+    speakers below); fall back to "Speaker A" style only when a name
+    truly cannot be inferred.
+
+- speakers: array of objects, one per distinct speaker label that actually
+  appears in the transcript, each with:
+    - label: the letter used in the transcript, e.g. "A"
+    - guessed_name: the person's real name if it can be confidently
+      inferred from what was said (a self-introduction, or being addressed
+      by name by someone else) — otherwise null. Never guess from writing
+      style or vibes; only from an explicit naming in the dialogue.
+
 - tasks: array of objects, each with:
-    - doer_name: string or null
+    - doer_names: array of every person's name this specific task is being
+      assigned to — most tasks name exactly one person, so this is usually
+      a single-element array, but write every name mentioned when one
+      instruction is given to several people at once (e.g. "Rahul and
+      Priya, get this done by Friday" -> ["Rahul", "Priya"])
     - description: string
     - deadline: ISO 8601 datetime string or null
     - report_to_name: string or null
 
-Return ONLY valid JSON with keys "mom_summary" and "tasks". No markdown, no explanation.`
+Return ONLY valid JSON with keys "mom_summary", "speakers" and "tasks". No markdown, no explanation.`
 
 const IDEA_SYSTEM = `You extract an idea from a voice transcript.
 Extract:
