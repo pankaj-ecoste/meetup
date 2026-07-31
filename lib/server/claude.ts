@@ -1,6 +1,6 @@
 import 'server-only'
 import Anthropic from '@anthropic-ai/sdk'
-import type { ExtractedTask, ExtractedMeeting, ExtractedIdea } from '../types'
+import type { ExtractedTaskDelegation, ExtractedMeeting, ExtractedIdea } from '../types'
 
 // AI extraction is Claude-only (locked in plan.md §8/§17 — no OpenAI).
 // Direct 1:1 port of backend/services/extraction.py, which was verified
@@ -35,14 +35,22 @@ function nowContext(): string {
   )
 }
 
-const TASK_SYSTEM = `You extract a single task delegation from a voice transcript.
-The speaker is delegating work to one person. Extract exactly:
-- doer_name: name of the person who must do the task (string or null)
+const TASK_SYSTEM = `You extract one or more task delegations from a voice transcript.
+The speaker may delegate a single task, or several distinct tasks in the same
+recording (e.g. "tell Rahul to finish the drawing by Friday, and ask Priya to
+send the vendor quote by Monday") — extract every distinct task mentioned.
+
+Extract a "tasks" array, each entry with exactly:
+- doer_names: array of every person's name this specific task is being
+  assigned to — most tasks name exactly one person, so this is usually a
+  single-element array, but write every name mentioned when one instruction
+  is given to several people at once (e.g. "Rahul and Priya, get this done
+  by Friday" -> ["Rahul", "Priya"])
 - description: what they need to do (string)
 - deadline: deadline as ISO 8601 datetime, e.g. "2024-12-31T17:00:00" (string or null)
 - report_to_name: who the doer reports completion to (string or null)
 
-Return ONLY valid JSON with these four keys. No markdown, no explanation.`
+Return ONLY valid JSON with the single key "tasks". No markdown, no explanation.`
 
 const MEETING_SYSTEM = `You extract minutes of meeting, speakers, and a task list from a
 speaker-tagged meeting transcript. The transcript is diarized: each line
@@ -123,8 +131,8 @@ async function call<T>(system: string, transcript: string): Promise<T> {
   return JSON.parse(textBlock.text) as T
 }
 
-export function extractTask(transcript: string): Promise<ExtractedTask> {
-  return call<ExtractedTask>(TASK_SYSTEM + nowContext(), transcript)
+export function extractTask(transcript: string): Promise<ExtractedTaskDelegation> {
+  return call<ExtractedTaskDelegation>(TASK_SYSTEM + nowContext(), transcript)
 }
 
 export function extractMeeting(transcript: string): Promise<ExtractedMeeting> {

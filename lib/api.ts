@@ -36,8 +36,8 @@ export const api = {
   tasksAllocated: (token: string, page = 1, search = '') =>
     authFetch(`/tasks/allocated?page=${page}&search=${encodeURIComponent(search)}`, token),
 
-  createTask: (token: string, body: object) =>
-    authFetch('/tasks', token, { method: 'POST', body: JSON.stringify(body) }),
+  createTaskBatch: (token: string, body: object) =>
+    authFetch('/tasks/batch', token, { method: 'POST', body: JSON.stringify(body) }),
 
   completeTask: (token: string, taskId: string, note?: string) =>
     authFetch(`/tasks/${taskId}/complete`, token, {

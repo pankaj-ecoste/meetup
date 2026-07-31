@@ -14,9 +14,10 @@
 --   * performance indexes (sized for 200-300 users)
 --   * the private `audio` storage bucket
 --   * seed rows     3 companies (Ecoste/Lamora/Metamask)
---                   2 designations (CEO = leadership, Employee = standard)
+--                   3 designations (CEO = leadership, Manager = manager,
+--                   Employee = standard)
 --
--- This is the consolidated form of migrations 0001-0018. Use THIS file for a
+-- This is the consolidated form of migrations 0001-0020. Use THIS file for a
 -- fresh database. Use migrations/ only to upgrade a database that already has
 -- an older version of the schema. See README.md in this folder.
 --
@@ -652,6 +653,19 @@ create policy "meetings_read_recorder_or_shared"
         and ms.shared_with_user_id = (select id from users where auth_id = auth.uid())
     )
   );
+
+-- ── 0020: Manager designation — company-scoped leadership tier ─────
+-- A third capability_tier sitting between 'standard' and 'leadership'.
+-- A Manager delegates and sees scores/reports only within their own
+-- company (enforced in app routes, scoped by the caller's company_id) —
+-- never cross-org like 'leadership'. See plan.md §8.11.
+alter table designations drop constraint if exists designations_capability_tier_check;
+alter table designations add constraint designations_capability_tier_check
+  check (capability_tier in ('standard', 'manager', 'leadership'));
+
+insert into designations (id, name, capability_tier) values
+  ('02', 'Manager', 'manager')
+on conflict (id) do nothing;
 
 -- ── Founder user row ─────────────────────────────────────────
 -- Run this AFTER the founder logs in via OTP for the first time.

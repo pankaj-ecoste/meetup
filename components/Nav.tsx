@@ -18,10 +18,12 @@ const NAV_ITEMS = [
   { href: '/performance', label: 'My Performance', icon: '📊' },
 ]
 
-const LEADERSHIP_ITEMS = [
-  { href: '/org-performance', label: 'Org Performance', icon: '🏢' },
-  { href: '/admin/employees', label: 'Manage Employees', icon: '🧑‍💼' },
-]
+// Org Performance is shown to leadership (cross-org) and manager
+// (company-scoped, plan.md §8.11) alike — the page itself scopes the data.
+// Manage Employees stays leadership-only: creating logins is more sensitive
+// than viewing scores.
+const ORG_PERFORMANCE_ITEM = { href: '/org-performance', label: 'Org Performance', icon: '🏢' }
+const ADMIN_ITEM = { href: '/admin/employees', label: 'Manage Employees', icon: '🧑‍💼' }
 
 // Items shown in mobile bottom nav (5 max)
 const MOBILE_NAV = [
@@ -50,7 +52,10 @@ export default function Nav({ profile }: Props) {
 
   const allItems = [
     ...NAV_ITEMS,
-    ...(profile?.capability_tier === 'leadership' ? LEADERSHIP_ITEMS : []),
+    ...(profile?.capability_tier === 'leadership' || profile?.capability_tier === 'manager'
+      ? [ORG_PERFORMANCE_ITEM]
+      : []),
+    ...(profile?.capability_tier === 'leadership' ? [ADMIN_ITEM] : []),
   ]
 
   function NavItem({ href, label, icon }: { href: string; label: string; icon: string }) {

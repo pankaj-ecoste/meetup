@@ -163,13 +163,6 @@ export type RecordingJob = {
   created_at: string
 }
 
-export type ExtractedTask = {
-  doer_name?: string
-  description: string
-  deadline?: string
-  report_to_name?: string
-}
-
 // A meeting task can name more than one doer in a single utterance
 // ("Rahul and Priya, finish this by Friday") — doer_names carries all of
 // them; ReviewForm fans this out into one task-draft card per name.
@@ -193,6 +186,13 @@ export type ExtractedSpeaker = {
 export type ExtractedMeeting = {
   mom_summary: string
   speakers?: ExtractedSpeaker[]
+  tasks: ExtractedMeetingTask[]
+}
+
+// Task delegation now extracts a list too (plan.md §8.12) — one recording
+// can name several tasks, each possibly assigned to several people, so it
+// reuses the exact same per-task shape the meeting flow already established.
+export type ExtractedTaskDelegation = {
   tasks: ExtractedMeetingTask[]
 }
 

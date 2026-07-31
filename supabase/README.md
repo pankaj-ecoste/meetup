@@ -23,12 +23,13 @@ That single file creates:
 | | |
 |---|---|
 | **9 tables** | `companies`, `designations`, `users`, `tasks`, `task_extensions`, `meetings`, `ideas`, `recording_jobs`, `meeting_shares` |
+| **3 designations** | `'00'` CEO (leadership, cross-org) · `'02'` Manager (company-scoped) · `'01'` Employee (standard) |
 | **2 views** | `user_performance` (derived scores), `leadership_task_register` (org-wide task metadata) |
 | **RLS** | enabled with policies on every table |
 | **Trigger** | `updated_at` auto-maintained on `tasks` and `recording_jobs` |
 | **Indexes** | on every foreign key and list-view filter — sized for 200–300 users |
 | **Storage** | the private `audio` bucket for recordings |
-| **Seed rows** | 3 companies · 2 designations |
+| **Seed rows** | 3 companies · 3 designations |
 
 It is safe to re-run — every statement is idempotent.
 
@@ -37,7 +38,7 @@ It is safe to re-run — every statement is idempotent.
 | Table | Expect |
 |---|---|
 | `companies` | `1001` Ecoste · `1002` Lamora · `1003` Metamask |
-| `designations` | `'00'` CEO (`leadership`) · `'01'` Employee (`standard`) |
+| `designations` | `'00'` CEO (`leadership`) · `'02'` Manager (`manager`) · `'01'` Employee (`standard`) |
 
 These IDs are small and human-readable on purpose — you will type them by hand when creating the first user.
 
@@ -63,7 +64,7 @@ values (
   'Founder Name',
   'founder@yourcompany.com',   -- must match the auth account's email exactly
   1001,                        -- 1001 Ecoste / 1002 Lamora / 1003 Metamask
-  '00',                        -- '00' = CEO (leadership) / '01' = Employee
+  '00',                        -- '00' = CEO (leadership) / '02' = Manager / '01' = Employee
   true,
   false                        -- false = they still set their password at /claim
 );
@@ -110,6 +111,7 @@ Run only the numbered files newer than what your database already has, **in orde
                                                     designations.id -> '00'/'01'
 0018_leadership_task_register_view.sql          org-wide register (no task descriptions)
 0019_meeting_shares.sql                         MoM sharing — meeting_shares table + widened meetings RLS
+0020_manager_designation.sql                    company-scoped 'manager' capability_tier + designation row
 ```
 
 **Read `0017` before running it.** It re-keys the primary keys of `companies` and `designations` and rebuilds every foreign key, index, RLS policy and view that depends on them. It runs inside a transaction, so it either fully succeeds or fully rolls back — but take a backup first.

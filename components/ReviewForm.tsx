@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import type {
   UserBrief,
-  ExtractedTask,
+  ExtractedTaskDelegation,
   ExtractedMeeting,
   ExtractedMeetingTask,
   ExtractedIdea,
@@ -262,16 +262,35 @@ export default function ReviewForm({ jobType, result, transcript, users, onDone,
   }
 
   // ── Task delegation state ──
-  const initTask = (): TaskDraft => {
-    const r = result as Partial<ExtractedTask>
-    return {
-      description: r.description?.trim() || transcript || '',
-      assigneeId: bestMatch(r.doer_name, users),
-      deadline: parseDeadline(r.deadline),
-      reportToId: bestMatch(r.report_to_name, users),
+  // A recording can name more than one task, each possibly assigned to more
+  // than one person — same fan-out as the meeting flow. A task-delegation
+  // recording with zero tasks isn't meaningful, so this always starts with
+  // at least one card (falling back to a single blank one for manual entry
+  // or if extraction somehow found nothing).
+  const initTaskDrafts = (): TaskDraft[] => {
+    const r = result as Partial<ExtractedTaskDelegation>
+    const rawTasks = r.tasks ?? []
+    if (rawTasks.length === 0) {
+      return [{ description: transcript || '', assigneeId: '', deadline: '', reportToId: '' }]
     }
+    return rawTasks.flatMap((t: ExtractedMeetingTask) => {
+      const names = t.doer_names && t.doer_names.length > 0 ? t.doer_names : [undefined]
+      return names.map(name => ({
+        description: t.description ?? '',
+        assigneeId: bestMatch(name, users),
+        deadline: parseDeadline(t.deadline),
+        reportToId: bestMatch(t.report_to_name, users),
+      }))
+    })
   }
-  const [taskDraft, setTaskDraft] = useState<TaskDraft>(initTask)
+  const [taskDrafts, setTaskDrafts] = useState<TaskDraft[]>(initTaskDrafts)
+
+  function addTaskDraft() {
+    setTaskDrafts(prev => [...prev, { description: '', assigneeId: '', deadline: '', reportToId: '' }])
+  }
+  function removeTaskDraft(index: number) {
+    setTaskDrafts(prev => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)))
+  }
 
   // ── Meeting state ──
   // One utterance can name several people at once ("Rahul and Priya, by
@@ -345,20 +364,21 @@ export default function ReviewForm({ jobType, result, transcript, users, onDone,
     setError('')
 
     if (jobType === 'task_delegation') {
-      const { description, assigneeId, deadline, reportToId } = taskDraft
-      if (!description.trim() || !assigneeId || !deadline || !reportToId) return
+      const allValid = taskDrafts.every(
+        t => t.description.trim() && t.assigneeId && t.deadline && t.reportToId
+      )
+      if (!allValid) return
       setSubmitting(true)
       try {
         const token = await freshToken()
-        const dl = new Date(deadline).toISOString()
-        await api.createTask(token, {
-          source: 'task_delegation',
-          assignee_id: assigneeId,
-          description: description.trim(),
-          deadline: dl,
-          original_deadline: dl,
-          report_to_id: reportToId,
-        })
+        const tasks = taskDrafts.map(t => ({
+          assignee_id: t.assigneeId,
+          description: t.description.trim(),
+          deadline: new Date(t.deadline).toISOString(),
+          original_deadline: new Date(t.deadline).toISOString(),
+          report_to_id: t.reportToId,
+        }))
+        await api.createTaskBatch(token, { tasks })
         onDone()
       } catch (e) {
         setError((e as Error).message)
@@ -446,14 +466,38 @@ export default function ReviewForm({ jobType, result, transcript, users, onDone,
         <>
           <div className="flex items-center gap-2 text-sm text-teal-700 bg-teal-50 border border-teal-200 rounded-xl px-3 py-2">
             <span>✓</span>
-            <span>{manual ? 'Fill in the task details below.' : 'Recording analysed. Review and confirm below.'}</span>
+            <span>
+              {manual
+                ? 'Fill in the task details below.'
+                : `Recording analysed — ${taskDrafts.length} task${taskDrafts.length !== 1 ? 's' : ''} found.`}
+            </span>
           </div>
-          <TaskDraftForm
-            draft={taskDraft}
-            onChange={setTaskDraft}
-            users={users}
-            submitted={submitted}
-          />
+
+          <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-1">
+            {taskDrafts.map((t, i) => (
+              <TaskDraftForm
+                key={i}
+                index={i}
+                draft={t}
+                onChange={d => {
+                  const next = [...taskDrafts]
+                  next[i] = d
+                  setTaskDrafts(next)
+                }}
+                onRemove={taskDrafts.length > 1 ? () => removeTaskDraft(i) : undefined}
+                users={users}
+                submitted={submitted}
+              />
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={addTaskDraft}
+            className="w-full border border-dashed border-gray-300 rounded-xl py-2.5 text-sm text-indigo-600 font-medium hover:bg-indigo-50"
+          >
+            + Add task
+          </button>
         </>
       )}
 

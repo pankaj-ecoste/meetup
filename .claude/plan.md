@@ -577,6 +577,36 @@ That measurement is the gate on everything after v1.0 (§8.9). It is deliberate:
 
 **Caveat carried over from §7.2:** the AssemblyAI webhook cannot reach `localhost`, so this can only be verified end-to-end on a deployed Vercel URL, not local dev.
 
+### 8.11 Manager tier — company-scoped leadership — HIGH
+**What:** a third `capability_tier`, `'manager'`, sitting between `standard` and `leadership`. A Manager (e.g. seeded as designation `'02' Manager`) delegates and sees scores/reports only within their own company, never cross-org.
+
+**Why:** today access is binary — `leadership` (CEO) sees and delegates across all three companies, everyone else is `standard` and fully blocked from the org dashboard. There's no tier for a company lead (e.g. the Ecoste lead) who should see their own company's numbers without seeing Lamora's or Metamask's.
+
+**Where:**
+- `supabase/migrations/0020_manager_designation.sql` + `supabase/setup.sql` — drop and recreate the `designations.capability_tier` check constraint to allow `'manager'` alongside `'standard'`/`'leadership'`; insert designation row `'02' / Manager / capability_tier 'manager'`.
+- `app/api/leadership/tasks/route.ts`, `app/api/leadership/today/route.ts`, `app/api/performance/org/route.ts` — gate becomes `leadership OR manager`, and a `manager` caller gets every query filtered to `company_id = caller.company_id` (the register and performance views already carry `company_id`; the "today" counts scope via an assignee-in-company lookup, since `tasks` itself has no `company_id` column).
+- `components/Nav.tsx` — "Org Performance" visible to `manager` too; "Manage Employees" stays `leadership`-only (explicit decision — creating logins is more sensitive than viewing scores).
+- `app/(app)/org-performance/page.tsx` — access gate widens to `leadership || manager`; header copy adapts to the caller's own company name when not full leadership.
+
+**What needs no change (already generic):** the same-company delegation restriction (`/api/users` dropdown, `POST /api/tasks`, `POST /api/meetings/batch` all already gate on `capability_tier !== 'leadership'`, which already applies to `manager`); self-elevation protection (`users_update_own` RLS already blocks a user from self-assigning any non-`'standard'` designation, so it already blocks self-promotion to `manager`); seeding a Manager (the existing leadership-gated `/admin/employees` form already lists designations dynamically).
+
+**Done when:** a user seeded with designation `Manager` at Ecoste can delegate only to Ecoste people, sees Org Performance (today snapshot, score bands, task register) containing only Ecoste rows, cannot see Lamora/Metamask data anywhere, and cannot open Manage Employees or self-promote their own designation.
+
+### 8.12 Multi-task recording — HIGH
+**What:** the "Record Task" flow moves from extracting a single flat task to extracting an array of tasks — same multi-assignee/add/remove pattern the meeting flow already has, applied to task delegation.
+
+**Why:** a single task-delegation recording can name more than one task ("tell Rahul to finish the drawing by Friday, and ask Priya to send the vendor quote by Monday") with different descriptions, report-tos, and deadlines each — the current flow only ever captures one. The meeting flow already solved this exact shape (`ExtractedMeetingTask[]` with `doer_names[]`, add/remove cards, batch insert); task delegation becomes the same shape instead of a separate one-off.
+
+**Where:**
+- `lib/server/claude.ts` — `TASK_SYSTEM` rewritten to extract `{ tasks: [...] }`, reusing the `ExtractedMeetingTask` shape (`doer_names[]`, `description`, `deadline`, `report_to_name`) instead of one flat object.
+- `lib/types.ts` — drop the single-task `ExtractedTask` type; task delegation now types its extraction result the same as a meeting's task array.
+- New `app/api/tasks/batch/route.ts` — mirrors `POST /api/meetings/batch`'s task-insertion and same-company-restriction logic, minus the meeting/MoM/sharing parts. Inserts N rows with `source: 'task_delegation'`, `meeting_id: null`.
+- `app/api/tasks/route.ts` (single-insert `POST`) and `lib/api.ts`'s `createTask` — retired; replaced by the batch endpoint so there's exactly one task-creation code path, not two.
+- `components/ReviewForm.tsx` — the `task_delegation` branch switches from one `TaskDraftForm` to the same list-of-cards UI the `meeting` branch already has (fan out by `doer_names`, "+ Add task", per-card "Remove") — except Remove is disabled when exactly one card remains, since (unlike a MoM-only meeting) a task recording with zero tasks isn't meaningful. "Type it in manually" starts with one blank card instead of one blank flat form.
+- `app/api/recordings/webhook/route.ts` — stores the new array-shaped result for `job_type: 'task_delegation'`, same as it already does for `meeting`.
+
+**Done when:** a recording naming two people two different tasks with two different deadlines produces two reviewable, independently-editable task cards; the reviewer can add a card Claude missed or remove one it invented (down to a minimum of one); "type it in manually" starts at one blank card; `npm run build` passes clean.
+
 ---
 
 ## 9. Future releases ⬜
