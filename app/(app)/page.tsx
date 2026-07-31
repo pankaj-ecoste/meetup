@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { api } from '@/lib/api'
+import PushOptIn from '@/components/PushOptIn'
 import type { DashboardCounts } from '@/lib/types'
 
 const COUNT_CARDS = [
@@ -96,6 +97,8 @@ export default function DashboardPage() {
   return (
     <div className="max-w-2xl mx-auto px-4 py-6">
       <h2 className="text-xl font-bold text-gray-900 mb-5">Dashboard</h2>
+
+      {token && <PushOptIn token={token} />}
 
       {/* Count cards */}
       <div className="grid grid-cols-2 gap-3 mb-8">

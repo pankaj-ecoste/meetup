@@ -1,6 +1,7 @@
 import { requireUser, HttpError } from '@/lib/server/auth'
 import { supabaseAdmin } from '@/lib/server/supabaseAdmin'
 import { jsonError } from '@/lib/server/http'
+import { sendPushToUser } from '@/lib/server/webpush'
 
 // PATCH /api/extensions/{id}/decide — the task assignor approves/denies.
 // An approved extension moves the task deadline (and reopens it if the new
@@ -20,13 +21,13 @@ export async function PATCH(
 
     const { data: ext } = await admin
       .from('task_extensions')
-      .select('*, tasks(assignor_id, deadline)')
+      .select('*, tasks(assignor_id, assignee_id, deadline)')
       .eq('id', id)
       .single()
     if (!ext) throw new HttpError(404, 'Extension not found')
 
     const taskJoin = (Array.isArray(ext.tasks) ? ext.tasks[0] : ext.tasks) as
-      | { assignor_id: string; deadline: string }
+      | { assignor_id: string; assignee_id: string; deadline: string }
       | null
     if (!taskJoin || taskJoin.assignor_id !== user.id) {
       throw new HttpError(403, 'Only the task assignor can decide on extensions')
@@ -56,6 +57,17 @@ export async function PATCH(
       .eq('id', id)
       .single()
     if (selErr) throw selErr
+
+    // Best-effort push to the requester (plan.md §8.14) — sendPushToUser never
+    // throws, so a notification failure can never affect this response.
+    await sendPushToUser(taskJoin.assignee_id, {
+      title: body.decision === 'approved' ? 'Extension approved' : 'Extension denied',
+      body:
+        body.decision === 'approved'
+          ? `${user.name} approved your deadline extension`
+          : `${user.name} denied your deadline extension request`,
+      url: '/received',
+    })
 
     return Response.json(updated)
   } catch (e) {

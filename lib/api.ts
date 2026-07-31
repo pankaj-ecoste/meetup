@@ -129,4 +129,10 @@ export const api = {
     }
     return res.json()
   },
+
+  subscribePush: (token: string, sub: PushSubscriptionJSON) =>
+    authFetch('/push/subscribe', token, { method: 'POST', body: JSON.stringify(sub) }),
+
+  unsubscribePush: (token: string, endpoint: string) =>
+    authFetch('/push/subscribe', token, { method: 'DELETE', body: JSON.stringify({ endpoint }) }),
 }

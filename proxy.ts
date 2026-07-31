@@ -52,6 +52,12 @@ export const config = {
     // Exclude /api/* — those are same-origin JSON route handlers that do their
     // own auth (Bearer JWT via requireUser, or the AssemblyAI webhook secret),
     // not cookie-session pages. The cookie-based redirect below is page-only.
-    '/((?!api|_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    //
+    // `.webmanifest` is excluded for the same reason as the image types: the
+    // browser fetches it to decide whether the app is installable, and on
+    // /login there is no session yet — redirecting it to /login would make the
+    // manifest unparseable and silently kill the install prompt on the one
+    // screen a new employee sees first. It carries no private data.
+    '/((?!api|_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|webmanifest)$).*)',
   ],
 }

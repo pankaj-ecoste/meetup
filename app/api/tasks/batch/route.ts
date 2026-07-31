@@ -2,6 +2,7 @@ import { requireUser, HttpError } from '@/lib/server/auth'
 import { supabaseAdmin } from '@/lib/server/supabaseAdmin'
 import { jsonError } from '@/lib/server/http'
 import { TASK_SELECT, enrichTasks } from '@/lib/server/tasks'
+import { sendPushToUser } from '@/lib/server/webpush'
 
 type BatchTask = {
   assignee_id: string
@@ -71,6 +72,19 @@ export async function POST(request: Request) {
 
     const { data: inserted, error: insErr } = await admin.from('tasks').insert(taskRows).select('id')
     if (insErr) throw insErr
+
+    // Best-effort push to each assignee (plan.md §8.14) — sendPushToUser never
+    // throws, so a notification failure can never affect this response.
+    const uniqueAssignees = [...new Set(taskRows.map((t) => t.assignee_id))]
+    await Promise.all(
+      uniqueAssignees.map((assigneeId) =>
+        sendPushToUser(assigneeId, {
+          title: 'New task assigned',
+          body: `${user.name} assigned you a task`,
+          url: '/received',
+        }),
+      ),
+    )
 
     const { data: enriched, error: selErr } = await admin
       .from('tasks')
