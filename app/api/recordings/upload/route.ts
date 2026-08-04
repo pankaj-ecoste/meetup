@@ -2,7 +2,7 @@ import { requireUser, HttpError } from '@/lib/server/auth'
 import { supabaseAdmin } from '@/lib/server/supabaseAdmin'
 import { jsonError } from '@/lib/server/http'
 import { submitTranscription } from '@/lib/server/assemblyai'
-import { BUCKET, VALID_JOB_TYPES, isOwnedPath } from '@/lib/server/recordings'
+import { BUCKET, VALID_JOB_TYPES, isOwnedPath, MIN_AUDIO_BYTES } from '@/lib/server/recordings'
 
 export const runtime = 'nodejs'
 
@@ -52,6 +52,21 @@ export async function POST(request: Request) {
     }
 
     const admin = supabaseAdmin()
+
+    // 0) Reject empty audio before it costs anything. Production storage holds
+    //    0-byte recordings that were uploaded, turned into jobs, submitted to
+    //    AssemblyAI, and came back "Transcription failed" — burning a
+    //    transcription and showing the user a meaningless error. RecordButton
+    //    catches this first; this is the backstop for any other caller.
+    const dir = storagePath.slice(0, storagePath.indexOf('/'))
+    const name = storagePath.slice(storagePath.indexOf('/') + 1)
+    const { data: listed } = await admin.storage
+      .from(BUCKET)
+      .list(dir, { search: name, limit: 1 })
+    const size = listed?.[0]?.metadata?.size
+    if (typeof size === 'number' && size < MIN_AUDIO_BYTES) {
+      throw new HttpError(400, 'That recording is empty or too short to transcribe.')
+    }
 
     // 1) Signed read URL for AssemblyAI to fetch the audio. This also doubles
     //    as an existence check — signing a path that was never uploaded fails,

@@ -11,6 +11,13 @@ export const BUCKET = 'audio'
 
 export const VALID_JOB_TYPES = new Set(['task_delegation', 'meeting', 'idea'])
 
+/**
+ * Smallest audio worth submitting. Mirrors MIN_RECORDING_BYTES in
+ * RecordButton — roughly half a second at 32 kbps. Below this there is nothing
+ * to transcribe, and submitting anyway produces a job that can only fail.
+ */
+export const MIN_AUDIO_BYTES = 2048
+
 // Extensions MediaRecorder can actually produce here (see RecordButton's
 // mimeType probe). Anything else falls back to webm rather than being trusted —
 // the filename comes from the browser, so it is never used verbatim in a path.

@@ -29,6 +29,11 @@ const BAR_DELAYS = ['0s', '0.15s', '0.3s', '0.15s', '0s']
 // meaningful accuracy cost for speech-to-text.
 const AUDIO_BITS_PER_SECOND = 32000
 
+// Below this a recording cannot contain usable speech. At 32 kbps one second is
+// ~4 KB, so this is roughly half a second — enough to catch empty and
+// mis-tapped recordings without rejecting a genuinely brief one.
+const MIN_RECORDING_BYTES = 2048
+
 // MediaRecorder.pause/resume is not universally implemented (Safari has been
 // the laggard). Detected once at runtime rather than assumed — where it is
 // missing the pause control is simply not offered, and recording still works.
@@ -148,6 +153,23 @@ export default function RecordButton({
         setState('idle')
         setSeconds(0)
         memChunksRef.current = []
+
+        // Empty and near-empty recordings used to be uploaded anyway: a job was
+        // created, AssemblyAI was billed for it, and it came back "Transcription
+        // failed" with nothing to show the user. Two 0-byte files are sitting in
+        // production storage from exactly this. Catch it here, where we can say
+        // something useful, instead of six steps downstream.
+        if (blob.size < MIN_RECORDING_BYTES) {
+          await deleteRecording(id)
+          refreshPending()
+          setPermError(
+            blob.size === 0
+              ? "That recording came out empty — no audio was captured. Check your microphone and try again."
+              : 'That recording was too short to transcribe. Hold the button and speak for a few seconds.',
+          )
+          return
+        }
+
         onRecordingComplete(blob, `recording.${ext}`, id)
       }
 
