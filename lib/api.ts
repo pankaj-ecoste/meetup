@@ -114,21 +114,25 @@ export const api = {
   recordingJob: (token: string, jobId: string) =>
     authFetch(`/recordings/jobs/${jobId}`, token),
 
-  uploadRecording: async (token: string, file: Blob, jobType: string, filename: string) => {
-    const form = new FormData()
-    form.append('file', file, filename)
-    form.append('job_type', jobType)
-    const res = await fetch(`${BASE}/recordings/upload`, {
+  // Recording upload is a three-step flow — see useRecordingJob.ts, which
+  // orchestrates it. The audio itself does NOT pass through these calls: it
+  // goes straight from the browser to Supabase Storage, because Vercel caps
+  // function request bodies at 4.5 MB and a long meeting is far bigger.
+
+  // Step 1: ask the server for a signed upload token (server picks the path).
+  recordingUploadUrl: (token: string, jobType: string, filename: string) =>
+    authFetch('/recordings/upload-url', token, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-      body: form,
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: res.statusText }))
-      throw new Error(err.detail ?? 'Upload failed')
-    }
-    return res.json()
-  },
+      body: JSON.stringify({ job_type: jobType, filename }),
+    }) as Promise<{ path: string; token: string }>,
+
+  // Step 3: tell the server the audio has landed, so it can create the job and
+  // submit to AssemblyAI. Sends only the path — a few hundred bytes.
+  createRecordingJob: (token: string, jobType: string, path: string) =>
+    authFetch('/recordings/upload', token, {
+      method: 'POST',
+      body: JSON.stringify({ job_type: jobType, path }),
+    }),
 
   subscribePush: (token: string, sub: PushSubscriptionJSON) =>
     authFetch('/push/subscribe', token, { method: 'POST', body: JSON.stringify(sub) }),

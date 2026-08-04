@@ -57,7 +57,7 @@ export default function DelegatePage() {
 
       {stage === 'idle' && !manual && (
         <div className="flex flex-col items-center py-8">
-          <RecordButton onRecordingComplete={start} maxSeconds={300} />
+          <RecordButton onRecordingComplete={start} jobType="task_delegation" maxSeconds={300} />
           <p className="text-xs text-gray-400 mt-6">Max 5 minutes</p>
           <button
             type="button"

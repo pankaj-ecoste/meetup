@@ -67,7 +67,7 @@ export default function IdeaPage() {
       {stage === 'idle' && !manual && (
         <>
           <div className="flex flex-col items-center py-8 mb-8">
-            <RecordButton onRecordingComplete={start} maxSeconds={300} />
+            <RecordButton onRecordingComplete={start} jobType="idea" maxSeconds={300} />
             <button
               type="button"
               onClick={() => setManual(true)}

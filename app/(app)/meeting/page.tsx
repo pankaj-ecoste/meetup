@@ -58,8 +58,8 @@ export default function MeetingPage() {
 
       {stage === 'idle' && (
         <div className="flex flex-col items-center py-8">
-          <RecordButton onRecordingComplete={start} maxSeconds={1800} />
-          <p className="text-xs text-gray-400 mt-6">Max 30 minutes</p>
+          <RecordButton onRecordingComplete={start} jobType="meeting" maxSeconds={3600} />
+          <p className="text-xs text-gray-400 mt-6">Max 60 minutes · pause and resume anytime</p>
         </div>
       )}
 

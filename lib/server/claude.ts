@@ -128,7 +128,37 @@ async function call<T>(system: string, transcript: string): Promise<T> {
   if (!textBlock || textBlock.type !== 'text') {
     throw new Error('Claude returned no text content')
   }
-  return JSON.parse(textBlock.text) as T
+  return parseJson<T>(textBlock.text)
+}
+
+/**
+ * Every system prompt above ends with "Return ONLY valid JSON ... No markdown",
+ * but the model occasionally wraps the object in a ```json fence anyway. A bare
+ * JSON.parse then throws `Unexpected token '\``, the job is marked errored and
+ * the recording is lost — that has happened to three real recordings.
+ *
+ * Stripping the fence costs nothing and is not a workaround for a bad prompt:
+ * it is defence against a failure mode whose only symptom is a lost recording.
+ */
+function parseJson<T>(raw: string): T {
+  let text = raw.trim()
+  if (text.startsWith('```')) {
+    text = text
+      .replace(/^```(?:json)?\s*\n?/i, '')
+      .replace(/\n?```\s*$/, '')
+      .trim()
+  }
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    // Last resort: the outermost {...} in the response.
+    const start = text.indexOf('{')
+    const end = text.lastIndexOf('}')
+    if (start > -1 && end > start) {
+      return JSON.parse(text.slice(start, end + 1)) as T
+    }
+    throw new Error('Claude returned malformed JSON')
+  }
 }
 
 export function extractTask(transcript: string): Promise<ExtractedTaskDelegation> {
