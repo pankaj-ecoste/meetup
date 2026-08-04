@@ -50,6 +50,10 @@ Extract a "tasks" array, each entry with exactly:
 - deadline: deadline as ISO 8601 datetime, e.g. "2024-12-31T17:00:00" (string or null)
 - report_to_name: who the doer reports completion to (string or null)
 
+Always write people's names in Latin script, even when the transcript is in
+Devanagari ("अरमान" -> "Arman"). Names are matched against an employee
+directory stored in Latin script, so a name in another script cannot match.
+
 Return ONLY valid JSON with the single key "tasks". No markdown, no explanation.`
 
 const MEETING_SYSTEM = `You extract minutes of meeting, speakers, and a task list from a
@@ -107,6 +111,10 @@ Extract exactly:
     - description: string
     - deadline: ISO 8601 datetime string or null
     - report_to_name: string or null
+
+Always write people's names in Latin script, even when the transcript is in
+Devanagari ("अरमान" -> "Arman"). Names are matched against an employee
+directory stored in Latin script, so a name in another script cannot match.
 
 Return ONLY valid JSON with keys "mom_summary", "speakers" and "tasks". No markdown, no explanation.`
 
