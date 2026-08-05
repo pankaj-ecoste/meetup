@@ -43,9 +43,15 @@ export async function POST(request: Request) {
     admin.from('recording_jobs').update(fields).eq('id', job.id)
 
   try {
-    // AssemblyAI itself reported a failure.
+    // AssemblyAI itself reported a failure. Its "no spoken audio" error is
+    // internal jargon ("language_detection cannot be performed on files with
+    // no spoken audio") and reaches the user as a red box they can do nothing
+    // with — so it is translated into the same actionable message an empty
+    // transcript already produces.
     if (body?.status === 'error') {
-      await update({ status: 'error', error_msg: body.error ?? 'Transcription failed' })
+      const raw = body.error ?? ''
+      const msg = /no spoken audio|no audio/i.test(raw) ? NO_SPEECH : raw || 'Transcription failed'
+      await update({ status: 'error', error_msg: msg })
       return Response.json({ ok: true })
     }
 

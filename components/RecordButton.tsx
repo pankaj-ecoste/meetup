@@ -29,10 +29,16 @@ const BAR_DELAYS = ['0s', '0.15s', '0.3s', '0.15s', '0s']
 // meaningful accuracy cost for speech-to-text.
 const AUDIO_BITS_PER_SECOND = 32000
 
-// Below this a recording cannot contain usable speech. At 32 kbps one second is
-// ~4 KB, so this is roughly half a second — enough to catch empty and
-// mis-tapped recordings without rejecting a genuinely brief one.
+// A recording must clear BOTH guards to be worth uploading.
+//
+// Bytes catch a truly empty blob (no chunks at all). Duration catches the case
+// bytes cannot: stopping within a second or so yields a structurally valid webm
+// of ~11 KB that contains a header and an init segment but no audio frames.
+// AssemblyAI rejects those with "language_detection cannot be performed on
+// files with no spoken audio" and audio_duration 0 — four such recordings
+// failed in production on the first day of testing.
 const MIN_RECORDING_BYTES = 2048
+const MIN_RECORDING_SECONDS = 2
 
 // MediaRecorder.pause/resume is not universally implemented (Safari has been
 // the laggard). Detected once at runtime rather than assumed — where it is
@@ -61,6 +67,9 @@ export default function RecordButton({
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordingIdRef = useRef<string>('')
   const seqRef = useRef(0)
+  // recorder.onstop is a closure created at start(), so it captured `seconds`
+  // as 0. This ref is what the duration guard in onstop can actually read.
+  const secondsRef = useRef(0)
   // Memory fallback for browsers where IndexedDB is unavailable (private
   // browsing, storage pressure). Recording must never depend on persistence.
   const memChunksRef = useRef<BlobPart[]>([])
@@ -73,7 +82,12 @@ export default function RecordButton({
 
   const startTimer = useCallback(() => {
     clearTimer()
-    timerRef.current = setInterval(() => setSeconds(s => s + 1), 1000)
+    timerRef.current = setInterval(() => {
+      setSeconds(s => {
+        secondsRef.current = s + 1
+        return s + 1
+      })
+    }, 1000)
   }, [clearTimer])
 
   // Un-uploaded recordings from a previous session — a locked screen, a reaped
@@ -125,6 +139,7 @@ export default function RecordButton({
       const ext = (recorder.mimeType || mimeType || '').includes('mp4') ? 'mp4' : 'webm'
       recordingIdRef.current = id
       seqRef.current = 0
+      secondsRef.current = 0
       memChunksRef.current = []
       persistedRef.current = true
 
@@ -150,6 +165,7 @@ export default function RecordButton({
         const mime = recorder.mimeType || mimeType || 'audio/webm'
         const stored = persistedRef.current ? await assembleRecording(id, mime) : null
         const blob = stored ?? new Blob(memChunksRef.current, { type: mime })
+        const recordedSeconds = secondsRef.current
         setState('idle')
         setSeconds(0)
         memChunksRef.current = []
@@ -159,13 +175,13 @@ export default function RecordButton({
         // failed" with nothing to show the user. Two 0-byte files are sitting in
         // production storage from exactly this. Catch it here, where we can say
         // something useful, instead of six steps downstream.
-        if (blob.size < MIN_RECORDING_BYTES) {
+        if (blob.size < MIN_RECORDING_BYTES || recordedSeconds < MIN_RECORDING_SECONDS) {
           await deleteRecording(id)
           refreshPending()
           setPermError(
             blob.size === 0
-              ? "That recording came out empty — no audio was captured. Check your microphone and try again."
-              : 'That recording was too short to transcribe. Hold the button and speak for a few seconds.',
+              ? 'That recording came out empty — no audio was captured. Check your microphone and try again.'
+              : 'That recording was too short. Tap record, speak for a few seconds, then tap stop.',
           )
           return
         }
