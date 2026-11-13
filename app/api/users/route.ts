@@ -14,7 +14,12 @@ export async function GET(request: Request) {
       .eq('is_active', true)
       .order('name')
     if (error) throw error
-    return Response.json((data ?? []) as UserBrief[])
+    // Only used for name suggestions on the review screen; the employee list
+    // changes rarely, so the browser may reuse it for 5 minutes (private = never
+    // stored by a shared cache). Success responses only — errors are not cached.
+    return Response.json((data ?? []) as UserBrief[], {
+      headers: { 'Cache-Control': 'private, max-age=300', Vary: 'Authorization' },
+    })
   } catch (e) {
     return jsonError(e)
   }

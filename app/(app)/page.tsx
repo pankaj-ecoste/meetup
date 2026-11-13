@@ -27,14 +27,19 @@ export default function RecordMeetingPage() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
       setToken(session.access_token)
-      try {
-        setDepartments(await api.departments(session.access_token))
-      } catch { /* shown as "no departments" below */ }
-      setLoaded(true)
-      try {
-        const users = (await api.users(session.access_token)) as UserBrief[]
-        setNames(users.map((u) => u.name))
-      } catch { /* suggestions are optional */ }
+      // Both lists are independent, so ask for them at the same time instead of
+      // one after the other — each request is a full browser→server round trip.
+      // The dropdown still appears as soon as departments arrive; the name
+      // suggestions are optional and may land a moment later.
+      const departmentsReq = api
+        .departments(session.access_token)
+        .then((d) => setDepartments(d))
+        .catch(() => { /* shown as "no departments" below */ })
+        .finally(() => setLoaded(true))
+      const usersReq = (api.users(session.access_token) as Promise<UserBrief[]>)
+        .then((users) => setNames(users.map((u) => u.name)))
+        .catch(() => { /* suggestions are optional */ })
+      await Promise.all([departmentsReq, usersReq])
     }
     init()
   }, [])

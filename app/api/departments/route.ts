@@ -13,7 +13,13 @@ export async function GET(request: Request) {
       .eq('is_active', true)
       .order('name')
     if (error) throw error
-    return Response.json((data ?? []) as Department[])
+    // Same list for every employee and it rarely changes, so let the browser
+    // reuse it for a minute (private = never stored by a shared cache). Short on
+    // purpose: a department an admin just added shows up within 60 s. Only this
+    // success response carries it — errors (401 etc.) are never cached.
+    return Response.json((data ?? []) as Department[], {
+      headers: { 'Cache-Control': 'private, max-age=60', Vary: 'Authorization' },
+    })
   } catch (e) {
     return jsonError(e)
   }
