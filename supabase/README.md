@@ -16,6 +16,11 @@ supabase/
 > sharing, push, companies and designations (old data discarded by decision) and keeps
 > `users`. After it runs, add the first departments in the app (Admin → Departments).
 > See `.claude/plan.md` §12.0.
+>
+> Then run `migrations/0023_meetings_task_count.sql` (optional speed-up: a `task_count`
+> column + a `created_at` index so the meetings list stops downloading every task's text).
+> It only adds things and is safe to run twice. The app works without it — it falls back
+> to the older query until the column exists.
 
 ## Setting up a fresh database
 

@@ -2,13 +2,29 @@ import { requireUser, HttpError } from '@/lib/server/auth'
 import { supabaseAdmin } from '@/lib/server/supabaseAdmin'
 import { jsonError } from '@/lib/server/http'
 import { syncMeeting } from '@/lib/server/meetingSync'
-import { MAX_TASKS, type MeetingRow, type MeetingTask } from '@/lib/types'
+import { MAX_TASKS, type MeetingRow, type MeetingTask, type SheetStatus } from '@/lib/types'
 
 export const runtime = 'nodejs'
 
 const PAGE_SIZE = 20
-const LIST_COLS =
-  'id, title, department_name, recorded_by_name, created_at, sheet_status, tasks'
+const LIST_COLS_BASE = 'id, title, department_name, recorded_by_name, created_at, sheet_status'
+// The list only shows "N tasks", so ask the database for the count (migration
+// 0023's generated column) instead of downloading every task's text.
+const LIST_COLS_FAST = `${LIST_COLS_BASE}, task_count`
+// Before migration 0023 has been run the column does not exist; the old query
+// keeps the list working until it is.
+const LIST_COLS_LEGACY = `${LIST_COLS_BASE}, tasks`
+
+type ListRow = {
+  id: string
+  title: string
+  department_name: string
+  recorded_by_name: string
+  created_at: string
+  sheet_status: SheetStatus
+  task_count?: number | null
+  tasks?: unknown
+}
 
 // GET /api/meetings?page=&all=1 — the caller's own meetings, newest first.
 // Admins may pass all=1 to see everyone's.
@@ -19,26 +35,36 @@ export async function GET(request: Request) {
     const page = Math.max(1, parseInt(sp.get('page') ?? '1', 10) || 1)
     const offset = (page - 1) * PAGE_SIZE
 
-    let query = supabaseAdmin()
-      .from('meetings')
-      .select(LIST_COLS)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + PAGE_SIZE - 1)
-    if (!(user.role === 'admin' && sp.get('all') === '1')) {
-      query = query.eq('recorded_by', user.id)
+    const everyone = user.role === 'admin' && sp.get('all') === '1'
+    const listPage = (cols: string) => {
+      let query = supabaseAdmin()
+        .from('meetings')
+        .select(cols)
+        .order('created_at', { ascending: false })
+        .range(offset, offset + PAGE_SIZE - 1)
+      if (!everyone) query = query.eq('recorded_by', user.id)
+      return query
     }
 
-    const { data, error } = await query
-    if (error) throw error
+    let res = await listPage(LIST_COLS_FAST)
+    // Column not there yet (migration 0023 not run) -> old query. If THAT also
+    // fails the problem is real, so it is thrown as before.
+    if (res.error) res = await listPage(LIST_COLS_LEGACY)
+    if (res.error) throw res.error
 
-    const rows: MeetingRow[] = (data ?? []).map((m) => ({
+    const rows: MeetingRow[] = ((res.data ?? []) as unknown as ListRow[]).map((m) => ({
       id: m.id,
       title: m.title,
       department_name: m.department_name,
       recorded_by_name: m.recorded_by_name,
       created_at: m.created_at,
       sheet_status: m.sheet_status,
-      task_count: Array.isArray(m.tasks) ? m.tasks.length : 0,
+      task_count:
+        typeof m.task_count === 'number'
+          ? m.task_count
+          : Array.isArray(m.tasks)
+            ? m.tasks.length
+            : 0,
     }))
     return Response.json(rows)
   } catch (e) {
