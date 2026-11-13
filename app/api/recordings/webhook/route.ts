@@ -1,7 +1,6 @@
 import { supabaseAdmin } from '@/lib/server/supabaseAdmin'
 import { verifyWebhookSecret, getTranscript } from '@/lib/server/assemblyai'
-import { extractTask, extractMeeting, extractIdea } from '@/lib/server/claude'
-import { formatIstDateTime } from '@/lib/server/istDate'
+import { extractMeeting } from '@/lib/server/claude'
 
 export const runtime = 'nodejs'
 
@@ -61,27 +60,15 @@ export async function POST(request: Request) {
       return Response.json({ ok: true })
     }
 
-    const isMeeting = job.job_type === 'meeting'
-    // Meetings extract from the speaker-tagged transcript so Claude can
-    // reason about who said what; task/idea recordings don't need it.
-    const transcript = isMeeting ? taggedText : text
-    await update({ status: 'extracting', transcript })
+    // Speaker-tagged transcript so Claude can reason about who said what.
+    await update({ status: 'extracting', transcript: taggedText })
 
-    if (isMeeting) {
-      const extracted = await extractMeeting(transcript)
-      // Date & Time and Attendees are prepended here rather than left to
-      // Claude: the job's own created_at is the real recording time, and
-      // Attendees must stay genuinely blank for the reviewer to fill in.
-      const header = `Date & Time: ${formatIstDateTime(new Date(job.created_at))}\nAttendees: \n\n`
-      const result = { ...extracted, mom_summary: header + extracted.mom_summary }
-      await update({ status: 'done', result })
-    } else {
-      const result =
-        job.job_type === 'task_delegation'
-          ? await extractTask(transcript)
-          : await extractIdea(transcript)
-      await update({ status: 'done', result })
-    }
+    // Employee directory → Claude + the server match spoken names to it.
+    const { data: people } = await admin.from('users').select('name').eq('is_active', true).order('name')
+    const names = (people ?? []).map((p) => p.name as string)
+
+    const result = await extractMeeting(taggedText, names)
+    await update({ status: 'done', result })
     return Response.json({ ok: true })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Pipeline failed'

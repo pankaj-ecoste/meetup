@@ -1,23 +1,14 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
+// Fixed 15-day login. proxy.ts signs the user out when this cookie is gone.
+const SESSION_DAYS = 15
+
 export default function LoginPage() {
   const router = useRouter()
-
-  // If a session already exists (e.g. arriving via a stale tab), go straight in.
-  useEffect(() => {
-    const supabase = createClient()
-    supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) {
-        router.push('/')
-        router.refresh()
-      }
-    })
-  }, [router])
-
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -32,13 +23,15 @@ export default function LoginPage() {
       email: email.trim(),
       password,
     })
-    setLoading(false)
     if (error) {
-      setError('Incorrect email or password.')
-    } else {
-      router.push('/')
-      router.refresh()
+      setLoading(false)
+      setError('Incorrect email or password. Ask your admin to reset it if you forgot.')
+      return
     }
+    const secure = window.location.protocol === 'https:' ? '; Secure' : ''
+    document.cookie = `mu_login_at=${Date.now()}; Path=/; Max-Age=${SESSION_DAYS * 24 * 60 * 60}; SameSite=Lax${secure}`
+    router.push('/')
+    router.refresh()
   }
 
   return (
@@ -46,14 +39,14 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-indigo-600 tracking-tight">MeetUp</h1>
-          <p className="text-gray-500 text-sm mt-1">Internal operations platform</p>
+          <p className="text-gray-500 text-sm mt-1">Record meetings. Get minutes and tasks.</p>
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
           <h2 className="text-lg font-semibold mb-1">Sign in</h2>
-          <p className="text-sm text-gray-500 mb-5">Enter your email and password.</p>
+          <p className="text-sm text-gray-500 mb-5">Use the email and password your admin gave you.</p>
 
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Work email</label>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Email</label>
           <input
             type="email"
             value={email}
@@ -86,14 +79,7 @@ export default function LoginPage() {
         </div>
 
         <p className="text-center text-sm text-gray-500 mt-6">
-          First time here or forgot your password?{' '}
-          <a href="/claim" className="text-indigo-600 hover:text-indigo-700 font-medium">
-            Set up your account
-          </a>
-        </p>
-
-        <p className="text-center text-xs text-gray-400 mt-6">
-          Ecoste · Lamora · Metamask
+          Forgot your password? Ask your admin to reset it.
         </p>
       </div>
     </div>

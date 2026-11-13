@@ -1,127 +1,105 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { use, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { api } from '@/lib/api'
+import SyncBadge from '@/components/SyncBadge'
+import type { MeetingDetail, UserProfile } from '@/lib/types'
 
-type Task = {
-  id: string
-  description: string
-  deadline: string
-  status: string
-  assignees?: { name: string }
-  report_tos?: { name: string }
+function fmtDeadline(d: string | null) {
+  if (!d) return '—'
+  return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
-type MeetingDetail = {
-  id: string
-  mom_summary?: string
-  created_at: string
-  tasks: Task[]
-}
-
-const STATUS_STYLES: Record<string, string> = {
-  open: 'text-teal-700 bg-teal-50 border-teal-200',
-  overdue: 'text-red-700 bg-red-50 border-red-200',
-  completed: 'text-green-700 bg-green-50 border-green-200',
-}
-
-export default function MeetingDetailPage() {
-  const params = useParams()
-  const router = useRouter()
-  const [meeting, setMeeting] = useState<MeetingDetail | null>(null)
-  const [loading, setLoading] = useState(true)
+// Read-only. Edits happen before Save; a saved meeting is corrected in the sheet.
+export default function MeetingDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params)
+  const [m, setM] = useState<MeetingDetail | null>(null)
   const [error, setError] = useState('')
-  const [showSummary, setShowSummary] = useState(false)
+  const [token, setToken] = useState('')
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [retrying, setRetrying] = useState(false)
 
   useEffect(() => {
-    async function init() {
-      const supabase = createClient()
-      const { data: { session } } = await supabase.auth.getSession()
+    async function load() {
+      const { data: { session } } = await createClient().auth.getSession()
       if (!session) return
+      setToken(session.access_token)
       try {
-        const data = await api.meeting(session.access_token, params.id as string)
-        setMeeting(data)
+        setM((await api.meeting(session.access_token, id)) as MeetingDetail)
+        const me = (await api.me(session.access_token)) as UserProfile
+        setIsAdmin(me.role === 'admin')
       } catch (e) {
-        setError((e as Error).message)
+        setError(e instanceof Error ? e.message : 'Could not load meeting')
       }
-      setLoading(false)
     }
-    init()
-  }, [params.id])
+    load()
+  }, [id])
 
-  if (loading) return <div className="text-center py-12 text-gray-400 text-sm">Loading…</div>
-
-  if (error || !meeting) {
-    return (
-      <div className="max-w-lg mx-auto px-4 py-12 text-center">
-        <p className="text-red-600 mb-4">{error || 'Meeting not found'}</p>
-        <button onClick={() => router.back()} className="text-indigo-600 text-sm hover:underline">← Back</button>
-      </div>
-    )
+  async function retry() {
+    setRetrying(true)
+    try {
+      await api.retryMeetingSync(token, id)
+      setM((await api.meeting(token, id)) as MeetingDetail)
+    } finally {
+      setRetrying(false)
+    }
   }
 
-  return (
-    <div className="max-w-2xl mx-auto px-4 py-6">
-      <button onClick={() => router.back()} className="text-sm text-indigo-600 hover:underline mb-4 block">
-        ← Back to meetings
-      </button>
+  if (error) return <div className="max-w-2xl mx-auto px-4 py-6 text-sm text-red-600">{error}</div>
+  if (!m) return <div className="max-w-2xl mx-auto px-4 py-6 text-sm text-gray-400">Loading…</div>
 
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="text-xl font-bold text-gray-900">Meeting</h2>
-        <span className="text-xs text-gray-400">
-          {new Date(meeting.created_at).toLocaleDateString('en-IN', {
-            day: 'numeric', month: 'short', year: 'numeric',
-            hour: '2-digit', minute: '2-digit'
-          })}
-        </span>
+  return (
+    <div className="max-w-2xl mx-auto px-4 py-6 space-y-5">
+      <Link href="/meetings" className="text-sm text-indigo-600 hover:text-indigo-700">← My meetings</Link>
+
+      <div>
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="text-xl font-bold text-gray-900">{m.title}</h2>
+          <SyncBadge status={m.sheet_status} />
+        </div>
+        <p className="text-sm text-gray-500 mt-1">
+          {m.department_name} · {m.recorded_by_name} ·{' '}
+          {new Date(m.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+        </p>
+        {m.sheet_status !== 'synced' && m.sheet_error && (
+          <p className="text-sm text-amber-700 mt-2">{m.sheet_error}</p>
+        )}
+        {isAdmin && m.sheet_status !== 'synced' && (
+          <button
+            onClick={retry}
+            disabled={retrying}
+            className="mt-2 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {retrying ? 'Retrying…' : 'Retry sheet sync'}
+          </button>
+        )}
       </div>
 
-      {meeting.mom_summary && (
-        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-6">
-          <button
-            type="button"
-            onClick={() => setShowSummary(s => !s)}
-            className="w-full flex items-center justify-between px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-50 hover:bg-gray-100"
-          >
-            <span>Minutes of Meeting (tap for {showSummary ? 'less' : 'full summary'})</span>
-            <span>{showSummary ? '▲' : '▼'}</span>
-          </button>
-          {showSummary && (
-            <p className="px-4 py-3 text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{meeting.mom_summary}</p>
-          )}
-        </div>
-      )}
+      <section>
+        <h3 className="text-sm font-semibold text-gray-900 mb-2">Minutes of meeting</h3>
+        <pre className="whitespace-pre-wrap font-sans text-sm text-gray-800 bg-white border border-gray-200 rounded-xl p-4">{m.mom}</pre>
+      </section>
 
-      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-        Tasks ({meeting.tasks.length})
-      </h3>
-
-      {meeting.tasks.length === 0 ? (
-        <p className="text-gray-400 text-sm">No tasks were extracted from this meeting.</p>
-      ) : (
-        <div className="space-y-3">
-          {meeting.tasks.map(task => (
-            <div key={task.id} className={`bg-white border rounded-xl p-4 ${STATUS_STYLES[task.status] || 'border-gray-200'}`}>
-              <p className="text-sm text-gray-800 mb-2">{task.description}</p>
-              <div className="flex items-center justify-between text-xs">
-                <div className="text-gray-500">
-                  {task.assignees?.name && <span>→ {task.assignees.name}</span>}
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className={`px-2 py-0.5 rounded-full border text-xs font-medium ${STATUS_STYLES[task.status] || 'border-gray-200 text-gray-600'}`}>
-                    {task.status}
-                  </span>
-                  <span className="text-gray-400">
-                    {new Date(task.deadline).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-                  </span>
-                </div>
+      <section>
+        <h3 className="text-sm font-semibold text-gray-900 mb-2">Action tasks ({m.tasks.length})</h3>
+        {m.tasks.length === 0 ? (
+          <p className="text-sm text-gray-500">No action tasks.</p>
+        ) : (
+          <div className="space-y-2">
+            {m.tasks.map((t, i) => (
+              <div key={i} className="bg-white border border-gray-200 rounded-xl p-3 text-sm">
+                <p className="text-xs font-semibold text-indigo-600 mb-1">Task {i + 1}</p>
+                <p><span className="text-gray-500">Assignee:</span> {t.assignee || '—'}</p>
+                <p><span className="text-gray-500">Task:</span> {t.description || '—'}</p>
+                <p><span className="text-gray-500">Deadline:</span> {fmtDeadline(t.deadline)}</p>
+                <p><span className="text-gray-500">Reporting to:</span> {t.reporting_to || '—'}</p>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   )
 }

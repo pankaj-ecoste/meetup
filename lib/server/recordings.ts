@@ -9,7 +9,8 @@ import 'server-only'
 
 export const BUCKET = 'audio'
 
-export const VALID_JOB_TYPES = new Set(['task_delegation', 'meeting', 'idea'])
+// MeetUp v2 records meetings only (the DB enum keeps its old values).
+export const VALID_JOB_TYPES = new Set(['meeting'])
 
 /**
  * Smallest audio worth submitting. Mirrors MIN_RECORDING_BYTES in

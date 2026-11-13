@@ -1,6 +1,7 @@
 import 'server-only'
 import Anthropic from '@anthropic-ai/sdk'
-import type { ExtractedTaskDelegation, ExtractedMeeting, ExtractedIdea } from '../types'
+import { MAX_TASKS, type ExtractedMeeting, type MeetingTask } from '../types'
+import { matchName } from '../nameMatch'
 
 // AI extraction is Claude-only (locked in plan.md §8/§17 — no OpenAI).
 // Direct 1:1 port of backend/services/extraction.py, which was verified
@@ -35,37 +36,21 @@ function nowContext(): string {
   )
 }
 
-const TASK_SYSTEM = `You extract one or more task delegations from a voice transcript.
-The speaker may delegate a single task, or several distinct tasks in the same
-recording (e.g. "tell Rahul to finish the drawing by Friday, and ask Priya to
-send the vendor quote by Monday") — extract every distinct task mentioned.
+const MEETING_SYSTEM = `You turn a speaker-tagged meeting transcript into a title, minutes of
+meeting (MOM) and an action-item list. The transcript is diarized: each line
+starts with an anonymous label like "Speaker A:" from an automated system that
+cannot identify people — only the words said can tell you who someone is.
 
-Extract a "tasks" array, each entry with exactly:
-- doer_names: array of every person's name this specific task is being
-  assigned to — most tasks name exactly one person, so this is usually a
-  single-element array, but write every name mentioned when one instruction
-  is given to several people at once (e.g. "Rahul and Priya, get this done
-  by Friday" -> ["Rahul", "Priya"])
-- description: what they need to do (string)
-- deadline: deadline as ISO 8601 datetime, e.g. "2024-12-31T17:00:00" (string or null)
-- report_to_name: who the doer reports completion to (string or null)
-
-Always write people's names in Latin script, even when the transcript is in
-Devanagari ("अरमान" -> "Arman"). Names are matched against an employee
-directory stored in Latin script, so a name in another script cannot match.
-
-Return ONLY valid JSON with the single key "tasks". No markdown, no explanation.`
-
-const MEETING_SYSTEM = `You extract minutes of meeting, speakers, and a task list from a
-speaker-tagged meeting transcript. The transcript is diarized: each line
-starts with an anonymous label like "Speaker A:" or "Speaker B:" from an
-automated system that cannot identify who these people actually are — only
-the words said can tell you that.
+The transcript may be Hindi, English or Hinglish (possibly in Devanagari).
+ALWAYS write every output field in ENGLISH, translating where needed.
 
 Extract exactly:
 
-- mom_summary: the minutes of meeting as plain text, bullet-point style,
-  in exactly this shape (blank line between sections, "-" for bullets):
+- title: a short, specific meeting title (max 10 words), e.g.
+  "Q3 dealer onboarding review". No date, no quotes.
+
+- mom: the minutes of meeting as plain text, bullet-point style, in exactly
+  this shape (blank line between sections, "-" for bullets):
 
     Summary
     A 1-2 line plain-language overview of what the meeting was about.
@@ -77,53 +62,33 @@ Extract exactly:
     Decisions Made
     - Decision one
 
-    Action Items
-    - <Name> — <one-line task> (by <deadline>)
-
     Next Steps
-    - One forward-looking line: the call to action, what should happen next
+    - One forward-looking line: what should happen next
 
-  Rules for mom_summary:
+  Rules for mom:
   - Omit the "Decisions Made" section entirely if nothing was actually
     decided — never write it with a filler line.
-  - Omit the "Action Items" section entirely if the tasks array below is
-    empty — never write it with a filler line.
-  - Never include a "Date & Time" or "Attendees" line yourself — those are
-    added separately, outside of what you produce.
-  - Use real names in mom_summary wherever you can resolve them (see
-    speakers below); fall back to "Speaker A" style only when a name
-    truly cannot be inferred.
+  - Do NOT include an "Action Items" section — action items are returned
+    separately in "tasks".
+  - Do NOT include a date, time or attendees line.
+  - Use real names wherever they can be resolved; fall back to "Speaker A"
+    style only when a name truly cannot be inferred.
 
-- speakers: array of objects, one per distinct speaker label that actually
-  appears in the transcript, each with:
-    - label: the letter used in the transcript, e.g. "A"
-    - guessed_name: the person's real name if it can be confidently
-      inferred from what was said (a self-introduction, or being addressed
-      by name by someone else) — otherwise null. Never guess from writing
-      style or vibes; only from an explicit naming in the dialogue.
-
-- tasks: array of objects, each with:
-    - doer_names: array of every person's name this specific task is being
-      assigned to — most tasks name exactly one person, so this is usually
-      a single-element array, but write every name mentioned when one
-      instruction is given to several people at once (e.g. "Rahul and
-      Priya, get this done by Friday" -> ["Rahul", "Priya"])
-    - description: string
-    - deadline: ISO 8601 datetime string or null
-    - report_to_name: string or null
+- tasks: array of action items from the meeting, AT MOST ${MAX_TASKS}. If more
+  than ${MAX_TASKS} exist, merge related ones and keep the most important.
+  Each task has:
+    - assignee: the person who must do it (string, Latin script). If one
+      instruction names several people, write them comma-separated in this one
+      string, e.g. "Rahul, Priya". Empty string only if truly nobody is named.
+    - description: what they need to do (string, English)
+    - deadline: ISO 8601 DATE "YYYY-MM-DD" or null if no deadline was said
+    - reporting_to: the person the assignee reports completion to (string,
+      Latin script) or "" if not said
 
 Always write people's names in Latin script, even when the transcript is in
-Devanagari ("अरमान" -> "Arman"). Names are matched against an employee
-directory stored in Latin script, so a name in another script cannot match.
+Devanagari ("अरमान" -> "Arman"). Names are later matched to an employee list.
 
-Return ONLY valid JSON with keys "mom_summary", "speakers" and "tasks". No markdown, no explanation.`
-
-const IDEA_SYSTEM = `You extract an idea from a voice transcript.
-Extract:
-- summary: concise summary of the idea (string)
-- tags: array of short topic tags (max 5, lowercase, use underscores not spaces)
-
-Return ONLY valid JSON with keys "summary" and "tags". No markdown, no explanation.`
+Return ONLY valid JSON with keys "title", "mom" and "tasks". No markdown, no explanation.`
 
 async function call<T>(system: string, transcript: string): Promise<T> {
   const response = await client().messages.create({
@@ -169,14 +134,47 @@ function parseJson<T>(raw: string): T {
   }
 }
 
-export function extractTask(transcript: string): Promise<ExtractedTaskDelegation> {
-  return call<ExtractedTaskDelegation>(TASK_SYSTEM + nowContext(), transcript)
+type RawMeeting = {
+  title?: unknown
+  mom?: unknown
+  tasks?: Array<{ assignee?: unknown; description?: unknown; deadline?: unknown; reporting_to?: unknown }>
 }
 
-export function extractMeeting(transcript: string): Promise<ExtractedMeeting> {
-  return call<ExtractedMeeting>(MEETING_SYSTEM + nowContext(), transcript)
-}
+const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 
-export function extractIdea(transcript: string): Promise<ExtractedIdea> {
-  return call<ExtractedIdea>(IDEA_SYSTEM, transcript)
+/**
+ * Extract title + MOM + tasks, then normalise: names matched to the employee
+ * directory, deadlines reduced to YYYY-MM-DD, tasks capped at MAX_TASKS.
+ */
+export async function extractMeeting(
+  transcript: string,
+  employeeNames: string[],
+): Promise<ExtractedMeeting> {
+  const directory = employeeNames.length
+    ? '\n\nEmployee directory (use these exact spellings when a spoken name matches one):\n' +
+      employeeNames.join('\n')
+    : ''
+  const raw = await call<RawMeeting>(MEETING_SYSTEM + directory + nowContext(), transcript)
+
+  const tasks: MeetingTask[] = (raw.tasks ?? []).slice(0, MAX_TASKS).map((t) => {
+    // "Rahul, Priya" → match each part, rejoin.
+    const assignee = str(t.assignee)
+      .split(/\s*(?:,|&|\band\b)\s*/i)
+      .filter(Boolean)
+      .map((n) => matchName(n, employeeNames))
+      .join(', ')
+    const dl = str(t.deadline)
+    return {
+      assignee,
+      description: str(t.description),
+      deadline: /^\d{4}-\d{2}-\d{2}/.test(dl) ? dl.slice(0, 10) : null,
+      reporting_to: matchName(str(t.reporting_to), employeeNames),
+    }
+  })
+
+  return {
+    title: str(raw.title) || 'Untitled meeting',
+    mom: str(raw.mom),
+    tasks,
+  }
 }

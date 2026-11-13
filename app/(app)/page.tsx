@@ -1,156 +1,153 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { api } from '@/lib/api'
-import PushOptIn from '@/components/PushOptIn'
-import type { DashboardCounts } from '@/lib/types'
+import RecordButton from '@/components/RecordButton'
+import MeetingReview, { type SaveResult } from '@/components/MeetingReview'
+import ProcessingSteps from '@/components/ProcessingSteps'
+import { useRecordingJob } from '@/lib/useRecordingJob'
+import type { Department, ExtractedMeeting, UserBrief } from '@/lib/types'
 
-const COUNT_CARDS = [
-  { key: 'given_open', label: 'Tasks Given', sub: 'open', color: 'bg-indigo-50 border-indigo-200 text-indigo-700' },
-  { key: 'received_open', label: 'Tasks Received', sub: 'open', color: 'bg-teal-50 border-teal-200 text-teal-700' },
-  { key: 'completed', label: 'Completed', sub: 'by me', color: 'bg-green-50 border-green-200 text-green-700' },
-  { key: 'overdue', label: 'Overdue', sub: 'by me', color: 'bg-red-50 border-red-200 text-red-700' },
-] as const
-
-const QUICK_ACTIONS = [
-  { href: '/delegate', label: 'Record Task', icon: '🎤', desc: 'Delegate one task' },
-  { href: '/meeting', label: 'Record Meeting', icon: '📋', desc: 'Capture MoM + tasks' },
-  { href: '/idea', label: 'New Idea', icon: '💡', desc: 'Store a thought' },
-]
-
-export default function DashboardPage() {
+// Home screen = the one job MeetUp does: pick department → record → review → Save.
+export default function RecordMeetingPage() {
   const [token, setToken] = useState('')
-  const [counts, setCounts] = useState<DashboardCounts | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [profileError, setProfileError] = useState(false)
-
-  const fetchCounts = useCallback(async (tok: string) => {
-    try {
-      const data = await api.dashboard(tok)
-      setCounts(data)
-    } catch {
-      // silently ignore — realtime will retry
-    }
-  }, [])
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [names, setNames] = useState<string[]>([])
+  const [departmentId, setDepartmentId] = useState('')
+  const [saved, setSaved] = useState<SaveResult | null>(null)
+  const { stage, statusLabel, jobId, jobResult, jobTranscript, errMsg, start, reset } =
+    useRecordingJob('meeting')
 
   useEffect(() => {
-    let channel: ReturnType<ReturnType<typeof createClient>['channel']> | null = null
-
     async function init() {
       const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
-
-      const tok = session.access_token
-      setToken(tok)
-
-      // Profile-exists check and counts are independent — run them together
-      // instead of one after another so the dashboard's first paint doesn't
-      // wait on two sequential network round trips.
-      const [meResult] = await Promise.allSettled([api.me(tok), fetchCounts(tok)])
-      if (meResult.status === 'rejected') setProfileError(true)
-      setLoading(false)
-
-      // Subscribe to task changes for live counts
-      const channelName = `dashboard-tasks-${Date.now()}`
-      channel = supabase
-        .channel(channelName)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => {
-          fetchCounts(tok)
-        })
-        .subscribe()
+      setToken(session.access_token)
+      try {
+        setDepartments(await api.departments(session.access_token))
+      } catch { /* shown as "no departments" below */ }
+      setLoaded(true)
+      try {
+        const users = (await api.users(session.access_token)) as UserBrief[]
+        setNames(users.map((u) => u.name))
+      } catch { /* suggestions are optional */ }
     }
-
     init()
-    return () => {
-      if (channel) {
-        const supabase = createClient()
-        supabase.removeChannel(channel)
-      }
-    }
-  }, [fetchCounts])
+  }, [])
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-gray-400 text-sm">Loading…</div>
-      </div>
-    )
-  }
+  const department = departments.find((d) => d.id === departmentId)
 
-  if (profileError) {
+  if (saved) {
+    const ok = saved.sheet_status === 'synced'
     return (
       <div className="max-w-lg mx-auto px-4 py-12 text-center">
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6">
-          <p className="text-amber-800 font-semibold mb-2">Account setup pending</p>
-          <p className="text-amber-700 text-sm">
-            You&apos;ve signed in, but your profile hasn&apos;t been linked yet.
-            Ask your admin to run the founder setup SQL and link your auth ID.
+        <div className="text-5xl mb-4">{ok ? '✅' : '⚠️'}</div>
+        <h2 className="text-xl font-bold mb-2">Meeting saved</h2>
+        {ok ? (
+          <p className="text-gray-500 text-sm mb-6">
+            Added to the <b>{department?.name}</b> sheet.
           </p>
+        ) : (
+          <p className="text-amber-700 text-sm mb-6">
+            Your meeting is saved, but it could not be added to the sheet yet
+            {saved.sheet_error ? ` (${saved.sheet_error})` : ''}. An admin can retry it — nothing is lost.
+          </p>
+        )}
+        <div className="flex gap-3 justify-center">
+          <button
+            onClick={() => { setSaved(null); reset() }}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700"
+          >
+            Record another
+          </button>
+          <Link
+            href="/meetings"
+            className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50"
+          >
+            My meetings
+          </Link>
         </div>
       </div>
     )
   }
 
+  const busy = stage === 'uploading' || stage === 'pending' || stage === 'transcribing' || stage === 'extracting'
+
   return (
-    <div className="max-w-2xl mx-auto px-4 py-6">
-      <h2 className="text-xl font-bold text-gray-900 mb-5">Dashboard</h2>
+    <div className="max-w-lg mx-auto px-4 py-6">
+      <h2 className="text-xl font-bold text-gray-900 mb-1">Record Meeting</h2>
+      <p className="text-sm text-gray-500 mb-6">
+        Pick your department, then record. We write the title, minutes and action tasks for you to check.
+      </p>
 
-      {token && <PushOptIn token={token} />}
-
-      {/* Count cards */}
-      <div className="grid grid-cols-2 gap-3 mb-8">
-        {COUNT_CARDS.map(({ key, label, sub, color }) => (
-          <div key={key} className={`rounded-xl border p-4 ${color}`}>
-            <p className="text-xs font-medium uppercase tracking-wide opacity-70">{label}</p>
-            <p className="text-3xl font-bold mt-1">{counts?.[key] ?? '–'}</p>
-            <p className="text-xs opacity-60 mt-0.5">{sub}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Quick actions */}
-      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-        Record something
-      </h3>
-      <div className="grid grid-cols-3 gap-3 mb-8">
-        {QUICK_ACTIONS.map(({ href, label, icon, desc }) => (
-          <Link
-            key={href}
-            href={href}
-            className="bg-white border border-gray-200 rounded-xl p-4 text-center hover:border-indigo-300 hover:bg-indigo-50 transition-colors group"
+      {(stage === 'idle' || stage === 'error') && (
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Department</label>
+          <select
+            value={departmentId}
+            onChange={(e) => setDepartmentId(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
-            <div className="text-3xl mb-2">{icon}</div>
-            <p className="text-xs font-semibold text-gray-700 group-hover:text-indigo-700">{label}</p>
-            <p className="text-xs text-gray-400 mt-0.5 hidden sm:block">{desc}</p>
-          </Link>
-        ))}
-      </div>
+            <option value="">Select department…</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+          {loaded && departments.length === 0 && (
+            <p className="text-xs text-amber-700 mt-2">
+              No departments yet. Ask an admin to add them (Admin → Departments).
+            </p>
+          )}
+        </div>
+      )}
 
-      {/* Shortcuts */}
-      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-        Views
-      </h3>
-      <div className="space-y-2">
-        {[
-          { href: '/received', label: 'Tasks Received', icon: '📥' },
-          { href: '/allocated', label: 'Tasks Allocated', icon: '📤' },
-          { href: '/meetings', label: 'Past Meetings', icon: '🗓' },
-          { href: '/performance', label: 'My Performance', icon: '📊' },
-        ].map(({ href, label, icon }) => (
-          <Link
-            key={href}
-            href={href}
-            className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-3 hover:border-indigo-300 hover:bg-indigo-50 transition-colors"
-          >
-            <span className="text-lg">{icon}</span>
-            <span className="text-sm font-medium text-gray-700">{label}</span>
-            <span className="ml-auto text-gray-300">›</span>
-          </Link>
-        ))}
-      </div>
+      {stage === 'idle' && (
+        <div className="flex flex-col items-center py-4">
+          <RecordButton
+            onRecordingComplete={start}
+            jobType="meeting"
+            maxSeconds={3600}
+            disabled={!departmentId}
+          />
+          <p className="text-xs text-gray-400 mt-6">
+            {departmentId ? 'Max 60 minutes · pause and resume anytime' : 'Select a department to start recording'}
+          </p>
+        </div>
+      )}
+
+      {busy && (
+        <div className="flex flex-col items-center py-12">
+          <ProcessingSteps stage={stage} label={statusLabel} />
+          <p className="text-gray-400 text-xs mt-4">Longer meetings take up to a minute</p>
+        </div>
+      )}
+
+      {stage === 'error' && (
+        <div className="bg-red-50 border border-red-200 rounded-2xl p-5 text-center">
+          <p className="text-red-700 font-medium mb-2">Something went wrong</p>
+          <p className="text-red-600 text-sm mb-4">{errMsg}</p>
+          <button onClick={reset} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
+            Try again
+          </button>
+        </div>
+      )}
+
+      {stage === 'review' && jobResult && jobId && department && (
+        <MeetingReview
+          token={token}
+          jobId={jobId}
+          departmentId={department.id}
+          departmentName={department.name}
+          initial={jobResult as Partial<ExtractedMeeting>}
+          transcript={jobTranscript}
+          names={names}
+          onSaved={setSaved}
+        />
+      )}
     </div>
   )
 }

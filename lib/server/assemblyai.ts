@@ -75,7 +75,7 @@ export function verifyWebhookSecret(req: Request): boolean {
 }
 
 export type TranscriptResult = {
-  // Flat merged text — what task_delegation and idea extraction read.
+  // Flat merged text.
   text: string
   // Speaker-tagged ("Speaker A: … \n Speaker B: …") — what meeting
   // extraction reads instead, so Claude can reason about who said what.

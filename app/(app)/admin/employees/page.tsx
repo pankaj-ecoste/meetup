@@ -1,270 +1,160 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from '@/lib/api'
-import type { EmployeeRow, CompanyBrief, DesignationBrief, UserProfile } from '@/lib/types'
+import { useAdmin } from '@/lib/useAdmin'
+import type { EmployeeRow } from '@/lib/types'
 
-type FormState = {
-  name: string
-  email: string
-  phone: string
-  company_id: string
-  designation_id: string
-}
+const INPUT =
+  'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent'
 
-const EMPTY_FORM: FormState = { name: '', email: '', phone: '', company_id: '', designation_id: '' }
+export default function EmployeesPage() {
+  const { token, me, ready } = useAdmin()
+  const [rows, setRows] = useState<EmployeeRow[]>([])
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [role, setRole] = useState<'employee' | 'admin'>('employee')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [resetFor, setResetFor] = useState<string | null>(null)
+  const [newPassword, setNewPassword] = useState('')
 
-export default function ManageEmployeesPage() {
-  const router = useRouter()
-  const [token, setToken] = useState('')
-  const [authChecked, setAuthChecked] = useState(false)
-  const [isLeadership, setIsLeadership] = useState(false)
-
-  const [employees, setEmployees] = useState<EmployeeRow[]>([])
-  const [companies, setCompanies] = useState<CompanyBrief[]>([])
-  const [designations, setDesignations] = useState<DesignationBrief[]>([])
-  const [loading, setLoading] = useState(true)
-
-  const [form, setForm] = useState<FormState>(EMPTY_FORM)
-  const [submitted, setSubmitted] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-
-  const load = useCallback(async (tok: string) => {
-    setLoading(true)
-    try {
-      const data = await api.employees(tok)
-      setEmployees(data.employees)
-      setCompanies(data.companies)
-      setDesignations(data.designations)
-    } catch { /* ignore */ }
-    setLoading(false)
-  }, [])
+  const [tick, setTick] = useState(0)
+  const load = useCallback(() => setTick((t) => t + 1), [])
 
   useEffect(() => {
-    async function init() {
-      const supabase = createClient()
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) return
-
-      const tok = session.access_token
-      setToken(tok)
-
+    if (!token) return
+    let cancelled = false
+    async function run() {
       try {
-        const profile: UserProfile = await api.me(tok)
-        if (profile.capability_tier !== 'leadership') {
-          setAuthChecked(true)
-          setIsLeadership(false)
-          return
-        }
-        setIsLeadership(true)
-        await load(tok)
-      } catch { /* ignore */ }
-
-      setAuthChecked(true)
+        const data = await api.employees(token)
+        if (!cancelled) setRows(data as EmployeeRow[])
+      } catch (e) {
+        if (!cancelled) setMsg({ ok: false, text: e instanceof Error ? e.message : 'Could not load employees' })
+      }
     }
-    init()
-  }, [load])
+    run()
+    return () => { cancelled = true }
+  }, [token, tick])
 
-  const missing = {
-    name: !form.name.trim(),
-    email: !form.email.trim(),
-    company_id: !form.company_id,
-  }
-  const hasError = submitted && Object.values(missing).some(Boolean)
-
-  async function submit() {
-    setSubmitted(true)
-    setError('')
-    setSuccess('')
-    if (missing.name || missing.email || missing.company_id) return
-
-    setSubmitting(true)
+  async function add() {
+    setBusy(true)
+    setMsg(null)
     try {
-      await api.createEmployee(token, {
-        name: form.name.trim(),
-        email: form.email.trim(),
-        phone: form.phone.trim() || undefined,
-        company_id: Number(form.company_id),
-        designation_id: form.designation_id || undefined,
-      })
-      setSuccess(`${form.name.trim()} added. They'll set a password the first time they log in via /claim.`)
-      setForm(EMPTY_FORM)
-      setSubmitted(false)
-      await load(token)
+      await api.createEmployee(token, { name, email, password, role })
+      setMsg({ ok: true, text: `${name} added. They can sign in with that email and password.` })
+      setName(''); setEmail(''); setPassword(''); setRole('employee')
+      load()
     } catch (e) {
-      setError((e as Error).message)
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'Could not add employee' })
     } finally {
-      setSubmitting(false)
+      setBusy(false)
     }
   }
 
-  if (!authChecked) {
-    return <div className="text-center py-12 text-gray-400 text-sm">Loading…</div>
+  async function reset(id: string, who: string) {
+    setBusy(true)
+    setMsg(null)
+    try {
+      await api.updateEmployee(token, id, { password: newPassword })
+      setMsg({ ok: true, text: `Password for ${who} was reset. Tell them the new password.` })
+      setResetFor(null)
+      setNewPassword('')
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'Could not reset password' })
+    } finally {
+      setBusy(false)
+    }
   }
 
-  if (!isLeadership) {
-    return (
-      <div className="max-w-lg mx-auto px-4 py-12 text-center">
-        <div className="text-5xl mb-4">🔒</div>
-        <h2 className="text-lg font-semibold mb-2">Access restricted</h2>
-        <p className="text-gray-500 text-sm mb-4">
-          This view is only available to leadership-tier accounts.
-        </p>
-        <button onClick={() => router.push('/')} className="text-indigo-600 text-sm hover:underline">
-          Back to dashboard
-        </button>
-      </div>
-    )
+  async function remove(id: string, who: string) {
+    if (!window.confirm(`Remove ${who}? They will no longer be able to sign in. Their past meetings stay.`)) return
+    setBusy(true)
+    setMsg(null)
+    try {
+      await api.removeEmployee(token, id)
+      setMsg({ ok: true, text: `${who} was removed.` })
+      load()
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'Could not remove employee' })
+    } finally {
+      setBusy(false)
+    }
   }
+
+  if (!ready) return null
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6">
-      <h2 className="text-xl font-bold text-gray-900 mb-1">Manage Employees</h2>
-      <p className="text-sm text-gray-500 mb-6">
-        Add a new employee — they claim their account (set a password, verify by OTP) the first time they log in.
-      </p>
+    <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
+      <h2 className="text-xl font-bold text-gray-900">Employees</h2>
 
-      <div className="bg-white border border-gray-200 rounded-xl p-5 mb-8 space-y-3">
-        <div className="grid sm:grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Name {submitted && missing.name && <span className="text-red-500">— required</span>}
-            </label>
-            <input
-              type="text"
-              value={form.name}
-              onChange={e => setForm({ ...form, name: e.target.value })}
-              className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                submitted && missing.name ? 'border-red-400 bg-red-50' : 'border-gray-300'
-              }`}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Email {submitted && missing.email && <span className="text-red-500">— required</span>}
-            </label>
-            <input
-              type="email"
-              value={form.email}
-              onChange={e => setForm({ ...form, email: e.target.value })}
-              className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                submitted && missing.email ? 'border-red-400 bg-red-50' : 'border-gray-300'
-              }`}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Phone (optional)</label>
-            <input
-              type="text"
-              value={form.phone}
-              onChange={e => setForm({ ...form, phone: e.target.value })}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Company {submitted && missing.company_id && <span className="text-red-500">— required</span>}
-            </label>
-            <select
-              value={form.company_id}
-              onChange={e => setForm({ ...form, company_id: e.target.value })}
-              className={`w-full border rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                submitted && missing.company_id ? 'border-red-400 bg-red-50' : 'border-gray-300'
-              }`}
-            >
-              <option value="">Select company…</option>
-              {companies.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Designation</label>
-            <select
-              value={form.designation_id}
-              onChange={e => setForm({ ...form, designation_id: e.target.value })}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="">Employee (default)</option>
-              {designations.map(d => (
-                <option key={d.id} value={d.id}>{d.name}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {hasError && (
-          <p className="text-red-600 text-xs bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-            Fill in all required fields before submitting.
-          </p>
-        )}
-        {error && (
-          <p className="text-red-600 text-sm bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
-        )}
-        {success && (
-          <p className="text-teal-700 text-sm bg-teal-50 border border-teal-200 rounded-lg px-3 py-2">{success}</p>
-        )}
-
-        <button
-          onClick={submit}
-          disabled={submitting}
-          className="bg-indigo-600 text-white rounded-lg px-4 py-2.5 text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {submitting ? 'Adding…' : 'Add employee'}
-        </button>
-      </div>
-
-      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-        All employees ({employees.length})
-      </h3>
-
-      {loading ? (
-        <div className="text-center py-12 text-gray-400 text-sm">Loading…</div>
-      ) : employees.length === 0 ? (
-        <div className="text-center py-12 text-gray-400 text-sm">No employees yet.</div>
-      ) : (
-        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Name</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Company</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Designation</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {employees.map(emp => (
-                <tr key={emp.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
-                  <td className="px-4 py-3">
-                    <p className="font-medium text-gray-800">{emp.name}</p>
-                    <p className="text-xs text-gray-400">{emp.email}</p>
-                  </td>
-                  <td className="px-4 py-3 text-gray-600">{emp.company_name}</td>
-                  <td className="px-4 py-3 text-gray-600">{emp.designation_name || '–'}</td>
-                  <td className="px-4 py-3">
-                    {!emp.is_active ? (
-                      <span className="text-xs font-medium text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-2 py-0.5">Inactive</span>
-                    ) : emp.password_set ? (
-                      <span className="text-xs font-medium text-teal-700 bg-teal-50 border border-teal-200 rounded-full px-2 py-0.5">Active</span>
-                    ) : (
-                      <span className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">Pending sign-up</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {msg && (
+        <p className={`text-sm rounded-lg px-3 py-2 border ${msg.ok ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-700'}`}>
+          {msg.text}
+        </p>
       )}
+
+      <section className="bg-white border border-gray-200 rounded-2xl p-4 space-y-3">
+        <h3 className="text-sm font-semibold text-gray-900">Add employee</h3>
+        <input className={INPUT} placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} />
+        <input className={INPUT} type="email" placeholder="Email (their login)" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <input className={INPUT} type="text" placeholder="Password (min 6 characters)" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="off" />
+        <select className={`${INPUT} bg-white`} value={role} onChange={(e) => setRole(e.target.value as 'employee' | 'admin')}>
+          <option value="employee">Employee</option>
+          <option value="admin">Admin</option>
+        </select>
+        <button
+          onClick={add}
+          disabled={busy || !name.trim() || !email.trim() || password.length < 6}
+          className="w-full bg-indigo-600 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+        >
+          Add employee
+        </button>
+      </section>
+
+      <section>
+        <h3 className="text-sm font-semibold text-gray-900 mb-2">Everyone ({rows.length})</h3>
+        <ul className="space-y-2">
+          {rows.map((r) => (
+            <li key={r.id} className="bg-white border border-gray-200 rounded-xl px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">
+                    {r.name}
+                    {r.role === 'admin' && (
+                      <span className="ml-2 text-[11px] font-medium px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">Admin</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-gray-500 truncate">{r.email}</p>
+                </div>
+                <div className="flex gap-3 shrink-0 text-xs font-medium">
+                  <button onClick={() => { setResetFor(resetFor === r.id ? null : r.id); setNewPassword('') }} className="text-indigo-600 hover:text-indigo-700">
+                    Reset password
+                  </button>
+                  {r.id !== me?.id && (
+                    <button onClick={() => remove(r.id, r.name)} disabled={busy} className="text-red-600 hover:text-red-700">
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+              {resetFor === r.id && (
+                <div className="mt-3 flex gap-2">
+                  <input className={INPUT} type="text" placeholder="New password (min 6)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="off" />
+                  <button
+                    onClick={() => reset(r.id, r.name)}
+                    disabled={busy || newPassword.length < 6}
+                    className="px-4 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    Set
+                  </button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
   )
 }

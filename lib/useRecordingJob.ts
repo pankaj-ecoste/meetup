@@ -49,11 +49,12 @@ type JobRow = {
   transcript?: string | null
 }
 
-export function useRecordingJob(jobType: 'task_delegation' | 'meeting' | 'idea') {
+export function useRecordingJob(jobType: 'meeting') {
   const [stage, setStage] = useState<RecordingStage>('idle')
   const [jobResult, setJobResult] = useState<Record<string, unknown> | null>(null)
   const [jobTranscript, setJobTranscript] = useState('')
   const [errMsg, setErrMsg] = useState('')
+  const [jobId, setJobId] = useState<string | null>(null)
 
   const jobIdRef = useRef<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -122,6 +123,7 @@ export function useRecordingJob(jobType: 'task_delegation' | 'meeting' | 'idea')
       if (recordingId) await deleteRecording(recordingId).catch(() => {})
 
       jobIdRef.current = job.id
+      setJobId(job.id)
       applyStatus(job)
       if (resolvedRef.current) return
 
@@ -170,11 +172,12 @@ export function useRecordingJob(jobType: 'task_delegation' | 'meeting' | 'idea')
     clearPoll()
     resolvedRef.current = false
     jobIdRef.current = null
+    setJobId(null)
     setStage('idle')
     setJobResult(null)
     setJobTranscript('')
     setErrMsg('')
   }, [clearPoll])
 
-  return { stage, statusLabel: STAGE_LABEL[stage], jobResult, jobTranscript, errMsg, start, reset }
+  return { stage, statusLabel: STAGE_LABEL[stage], jobId, jobResult, jobTranscript, errMsg, start, reset }
 }

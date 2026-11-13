@@ -17,7 +17,7 @@ type Props = {
   // `recordingId` lets the caller delete the crash-safe copy once the upload
   // has been accepted — see lib/recordingStore.ts.
   onRecordingComplete: (blob: Blob, filename: string, recordingId: string) => void
-  jobType: 'task_delegation' | 'meeting' | 'idea'
+  jobType: 'meeting'
   maxSeconds?: number
   disabled?: boolean
 }

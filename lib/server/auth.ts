@@ -23,8 +23,8 @@ function bearerToken(req: Request): string {
 
 /**
  * Verify the Supabase JWT on the request, then load the caller's active
- * `users` row joined with company name and designation capability tier.
- * Port of backend/routers/auth.py `get_me`.
+ * `users` row. A removed employee has is_active=false (and no auth user), so
+ * they can never get past this.
  */
 export async function requireUser(req: Request): Promise<UserProfile> {
   const token = bearerToken(req)
@@ -34,12 +34,11 @@ export async function requireUser(req: Request): Promise<UserProfile> {
   if (authError || !authData?.user) {
     throw new HttpError(401, 'Invalid or expired token')
   }
-  const authUid = authData.user.id
 
   const { data, error } = await admin
     .from('users')
-    .select('*, companies(name), designations(capability_tier)')
-    .eq('auth_id', authUid)
+    .select('id, name, email, phone, role, is_active')
+    .eq('auth_id', authData.user.id)
     .eq('is_active', true)
     .single()
 
@@ -52,27 +51,16 @@ export async function requireUser(req: Request): Promise<UserProfile> {
     name: data.name,
     email: data.email,
     phone: data.phone ?? undefined,
-    company_id: data.company_id,
-    company_name: data.companies?.name ?? '',
-    designation_id: data.designation_id ?? undefined,
-    capability_tier: data.designations?.capability_tier ?? undefined,
+    role: data.role,
     is_active: data.is_active,
   }
 }
 
-/**
- * Verify the Supabase JWT on the request and return the raw auth identity —
- * WITHOUT requiring a linked `users` row. Used only by the claim-finish step,
- * where the whole point of the call is to link a profile that isn't linked
- * yet (requireUser would 404 there).
- */
-export async function requireAuthIdentity(
-  req: Request,
-): Promise<{ authId: string; email: string }> {
-  const token = bearerToken(req)
-  const { data, error } = await supabaseAdmin().auth.getUser(token)
-  if (error || !data?.user?.email) {
-    throw new HttpError(401, 'Invalid or expired token')
+/** Same as requireUser, but only admins get through. */
+export async function requireAdmin(req: Request): Promise<UserProfile> {
+  const user = await requireUser(req)
+  if (user.role !== 'admin') {
+    throw new HttpError(403, 'Access denied — admin only')
   }
-  return { authId: data.user.id, email: data.user.email }
+  return user
 }

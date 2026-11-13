@@ -3,7 +3,7 @@ import './globals.css'
 
 export const metadata: Metadata = {
   title: 'MeetUp',
-  description: 'Internal operations platform — Ecoste · Lamora · Metamask',
+  description: 'Record meetings. Get minutes and action tasks in your sheet.',
   // Emits <meta name="mobile-web-app-capable">, the app title iOS shows under
   // the home-screen icon, and the status-bar style (plan.md §8.13).
   appleWebApp: {

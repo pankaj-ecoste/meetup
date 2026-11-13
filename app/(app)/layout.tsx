@@ -9,32 +9,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   if (!user) redirect('/login')
 
-  // Fetch the nav profile in the same server round trip as the auth check
-  // above, and pass it down as a prop — Nav used to re-fetch this itself on
-  // every single navigation (getSession + a full /api/auth/me round trip),
-  // which was a big chunk of the per-tab-switch lag. One query here instead.
+  // One query here, passed to Nav as a prop (Nav used to re-fetch on every
+  // navigation, which made tab switches laggy).
   const { data: row } = await supabase
     .from('users')
-    .select('id, name, email, company_id, companies(name), designations(capability_tier)')
+    .select('id, name, email, role')
     .eq('auth_id', user.id)
     .eq('is_active', true)
     .single()
 
-  const companies = row?.companies as unknown
-  const designations = row?.designations as unknown
-  const companyObj = Array.isArray(companies) ? companies[0] : companies
-  const designationObj = Array.isArray(designations) ? designations[0] : designations
-
   const profile: UserProfile | null = row
-    ? {
-        id: row.id,
-        name: row.name,
-        email: row.email,
-        company_id: row.company_id,
-        company_name: (companyObj as { name?: string } | null)?.name ?? '',
-        capability_tier: (designationObj as { capability_tier?: string } | null)?.capability_tier,
-        is_active: true,
-      }
+    ? { id: row.id, name: row.name, email: row.email, role: row.role, is_active: true }
     : null
 
   return (

@@ -10,6 +10,13 @@ supabase/
 
 ---
 
+> ## ⚠️ v2 (2026-11): run `migrations/0022_v2_meeting_sheet.sql` after `setup.sql`
+> `setup.sql` still creates the OLD (v1) schema. MeetUp v2 — record a meeting → Google Sheet —
+> needs `migrations/0022_v2_meeting_sheet.sql` applied on top. It **drops** tasks, ideas,
+> sharing, push, companies and designations (old data discarded by decision) and keeps
+> `users`. After it runs, add the first departments in the app (Admin → Departments).
+> See `.claude/plan.md` §12.0.
+
 ## Setting up a fresh database
 
 Do this once, on a brand-new Supabase project.

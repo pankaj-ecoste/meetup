@@ -4,9 +4,9 @@ import type { MetadataRoute } from 'next'
 // the address bar once the app is on the home screen.
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'MeetUp — Ecoste · Lamora · Metamask',
+    name: 'MeetUp',
     short_name: 'MeetUp',
-    description: 'Voice-first task delegation, meetings, and ideas.',
+    description: 'Record meetings. Get minutes and action tasks in your sheet.',
     start_url: '/',
     scope: '/',
     display: 'standalone',

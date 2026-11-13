@@ -7,31 +7,16 @@ import { createClient } from '@/lib/supabase/client'
 import type { UserProfile } from '@/lib/types'
 
 const NAV_ITEMS = [
-  { href: '/', label: 'Dashboard', icon: '⊞' },
-  { href: '/delegate', label: 'Record Task', icon: '🎤' },
-  { href: '/meeting', label: 'Record Meeting', icon: '📋' },
-  { href: '/idea', label: 'New Idea', icon: '💡' },
-  { href: '/received', label: 'Tasks Received', icon: '📥' },
-  { href: '/allocated', label: 'Tasks Allocated', icon: '📤' },
-  { href: '/meetings', label: 'Meetings', icon: '🗓' },
-  { href: '/meetings/shared', label: 'Shared with me', icon: '📨' },
-  { href: '/performance', label: 'My Performance', icon: '📊' },
+  { href: '/', label: 'Record Meeting', icon: '🎙' },
+  { href: '/meetings', label: 'My Meetings', icon: '🗓' },
 ]
 
-// Org Performance is shown to leadership (cross-org) and manager
-// (company-scoped, plan.md §8.11) alike — the page itself scopes the data.
-// Manage Employees stays leadership-only: creating logins is more sensitive
-// than viewing scores.
-const ORG_PERFORMANCE_ITEM = { href: '/org-performance', label: 'Org Performance', icon: '🏢' }
-const ADMIN_ITEM = { href: '/admin/employees', label: 'Manage Employees', icon: '🧑‍💼' }
-
-// Items shown in mobile bottom nav (5 max)
-const MOBILE_NAV = [
-  { href: '/', label: 'Home', icon: '⊞' },
-  { href: '/delegate', label: 'Task', icon: '🎤' },
-  { href: '/meeting', label: 'Meeting', icon: '📋' },
-  { href: '/received', label: 'Received', icon: '📥' },
-  { href: '/allocated', label: 'Allocated', icon: '📤' },
+// Admin-only screens.
+const ADMIN_ITEMS = [
+  { href: '/admin/meetings', label: 'All Meetings', icon: '📚' },
+  { href: '/admin/employees', label: 'Employees', icon: '🧑‍💼' },
+  { href: '/admin/departments', label: 'Departments', icon: '🏷' },
+  { href: '/admin/sheet', label: 'Sheet Connection', icon: '📊' },
 ]
 
 type Props = { profile: UserProfile | null }
@@ -50,13 +35,12 @@ export default function Nav({ profile }: Props) {
     router.refresh()
   }
 
-  const allItems = [
-    ...NAV_ITEMS,
-    ...(profile?.capability_tier === 'leadership' || profile?.capability_tier === 'manager'
-      ? [ORG_PERFORMANCE_ITEM]
-      : []),
-    ...(profile?.capability_tier === 'leadership' ? [ADMIN_ITEM] : []),
-  ]
+  const isAdmin = profile?.role === 'admin'
+  const allItems = [...NAV_ITEMS, ...(isAdmin ? ADMIN_ITEMS : [])]
+  // Bottom bar on phones: the two employee screens, plus Admin for admins.
+  const mobileItems = isAdmin
+    ? [...NAV_ITEMS, { href: '/admin/sheet', label: 'Sheet', icon: '📊' }, { href: '/admin/employees', label: 'People', icon: '🧑‍💼' }]
+    : NAV_ITEMS
 
   function NavItem({ href, label, icon }: { href: string; label: string; icon: string }) {
     const active = pathname === href
@@ -82,7 +66,7 @@ export default function Nav({ profile }: Props) {
         <h1 className="text-xl font-bold text-indigo-600">MeetUp</h1>
         {profile && (
           <p className="text-xs text-gray-500 mt-0.5 truncate">
-            {profile.name} · {profile.company_name}
+            {profile.name}{isAdmin ? ' · Admin' : ''}
           </p>
         )}
       </div>
@@ -140,7 +124,7 @@ export default function Nav({ profile }: Props) {
 
       {/* Mobile bottom nav */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-gray-200 flex">
-        {MOBILE_NAV.map(({ href, label, icon }) => {
+        {mobileItems.map(({ href, label, icon }) => {
           const active = pathname === href
           return (
             <Link

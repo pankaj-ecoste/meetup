@@ -700,3 +700,232 @@ These do not get re-litigated. If one needs to change, write the change into §8
 - **Derived score** — performance computed live from `tasks`, never stored as a column.
 - **Approved extension** — a deadline change approved by the assignor; the only thing that protects a doer's score.
 - **Gate** — a checkpoint that fully blocks the next release until every criterion passes.
+
+---
+
+## 12. v2 re-scope — "MeetUp = meeting recorder → sheet" 🗣️ IN DISCUSSION (no code until approved)
+
+> Status: collecting changes one by one with the owner (started 2026-11-13). **Nothing here is built.**
+> When every change is discussed, we map the full flow, resolve open questions, then the owner approves, then we build.
+> Direction: the team found real use cases; the app is being reshaped around them. Features that don't serve them will be **removed** (list in 12.2), new ones added.
+
+### 12.0 ✅ FINAL SPEC — consolidated 2026-11-13 (the build contract; 12.1+ below is the discussion log)
+
+**What MeetUp is now:** an employee picks a **department**, records a meeting, MeetUp transcribes it and AI writes a **title, MOM and action tasks**; the employee reviews/edits and clicks **Save**; it is stored in **Supabase** and then written as **one row** into the department's **tab** in a linked **Google Sheet**. MIS delegates tasks from the sheet. MeetUp does **no** task delegation.
+
+**Roles (2 tiers):** `employee`, `admin` (old CEO tier). No companies, no designations.
+
+**Login:** email + password, admin-managed. Admin adds an employee (name, email, password) or removes one; admin resets forgotten passwords. No self-signup, no OTP/emails, employees cannot change their own password, no forced change. Session **15 days absolute**. Removing an employee blocks login but **keeps their meetings**.
+
+**Employee screens:** Record Meeting (home) · My Meetings (simple list, read-only detail, sheet-sync status). PWA kept; push notifications removed.
+
+**Record flow:** department dropdown (required) → record → upload → AssemblyAI → Claude → review/edit (title, MOM, up to 10 tasks: assignee, description, deadline, reporting to) → Save.
+- Claude output is **English only**; assignee/reporting-to names are matched to the employee list (unmatched names kept as heard, user can fix).
+- Max **10 tasks**; enforced in prompt, form and server.
+- Save is **idempotent per recording job** (double-click / retry cannot create two meetings).
+
+**Admin screens:** Employees (add / remove / reset password) · Departments (add / rename / deactivate) · Sheet connection (shows the robot email, paste sheet link → test → connect; shows failed syncs with Retry) · all meetings.
+
+**Sheet (one tab per department, tab name = department name; created/renamed automatically). Header, 16 columns, identical on every tab:**
+A Meeting ID · B Date · C Meeting Title · D MOM · E Recorded By · F–O Task 1 … Task 10 · P Synced At.
+Task cell (multi-line): `Assignee: … / Task: … / Deadline: dd-Mmm-yyyy / Reporting to: …`. One row per meeting; unused task cells empty. Rows written as plain text (never as formulas). Linking a new sheet: only **new** meetings go to it; old meetings stay in the old sheet.
+
+**Sync:** Save → Supabase first (`sheet_status = pending`) → sheet write → `synced`, or `failed` + error (meeting is never lost). Admin can retry failed ones. Meeting ID is the upsert key (a retry never duplicates a row).
+
+**Google access:** service account (robot email + key in server env vars `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_SERVICE_ACCOUNT_KEY`); the sheet is shared with the robot email as Editor. Needs a one-time Google Cloud setup by the owner.
+
+**Database (clean-up; old data discarded by owner's decision):** drop `tasks`, `task_extensions`, `ideas`, `meeting_shares`, `push_subscriptions`, old `meetings`, views, `companies`, `designations`; `users` keeps employees + logins, gains `role`; new `departments`, `meetings` (title, mom, tasks jsonb, department, recorder snapshot, sheet status), `app_settings` (linked sheet). Migration `0022_v2_meeting_sheet.sql` — **written but only applied to the live DB on the owner's explicit go-ahead.**
+
+**Removed from the app:** delegate/received/allocated/dashboard/performance/org-performance/ideas/shared pages, tasks/extensions/performance/leadership/ideas/push APIs, claim/OTP flow, push + service-worker push code.
+
+**Build order:** (1) migration file · (2) server: auth, sheets, claude, webhook, APIs · (3) UI: login, nav, record page + review editor, history, admin screens · (4) delete removed code · (5) lint + build + unit-check the sheet formatting/name matching · (6) hand over setup steps (apply migration, Google key, Vercel env, connect sheet).
+
+**Known follow-ups (not in this build):** automatic background retry of failed syncs (v1 = admin Retry button); deadline is date-only (no time of day).
+
+### 12.1 Change #1 — The core job: record a meeting, everything lands in a sheet
+
+One pipeline is now the crux of the app:
+
+1. **Before recording:** user picks their **Department** from a dropdown.
+2. **Record** the meeting (existing recorder + upload reliability work stays).
+3. **Transcribe** (existing AssemblyAI step).
+4. **AI generates** (Claude): a **meeting title**, the **MOM**, and **all action items** from the meeting.
+5. **Write to a sheet:** one row per meeting (and/or per action item — see open questions) with: department, title, MOM, action items, plus metadata.
+
+**What exists today (verified in code 2026-11-13):**
+- Recording → upload → AssemblyAI → Claude already produces MOM + task list for meetings (`lib/server/claude.ts` MEETING_SYSTEM, `lib/server/recordings.ts`).
+- `meetings` table has: recorded_by, company_id, transcript, audio_url, mom_summary, created_at. **No title, no department.**
+- **No department concept exists anywhere** in code or schema (only companies + designations).
+- **No sheet integration exists.**
+
+**Gaps to build (when approved):** department list + dropdown, `title` + `department` on meetings, title in the Claude prompt, sheet writer, retry/failure handling for the sheet write.
+
+### 12.2 Change #2 — Remove task delegation from MeetUp (decided 2026-11-13)
+
+**Decision (owner):** MeetUp no longer delegates or tracks tasks. Delegation is done **from the sheet, by the MIS department**. MeetUp's job ends at handing MIS a sheet row containing: **meeting title, department, MOM, all action items from the meeting**.
+
+**Everything in the app that is built on tasks (found in code, candidates for removal — owner to confirm each):**
+- Pages: `/delegate` (Record Task), `/received`, `/allocated`, Dashboard `/` (task dashboard), `/performance`, `/org-performance`
+- APIs: `api/tasks/*` (batch, received, allocated, dashboard, complete), `api/extensions/*`, `api/performance/*`, `api/leadership/*`
+- Components: TaskCard, ExtensionModal, ScoreCard, ScoreBands, TaskRegister, TodayTiles
+- Data: `tasks`, `task_extensions` tables, `user_performance` + leadership task-register views — **DB data removal is destructive; nothing is dropped without explicit go-ahead, and a backup/export first**
+- Meeting side: Claude's meeting prompt currently matches speakers to employees and creates one in-app task per person (`api/meetings/batch`) — this changes to "plain action-item list" written to the sheet
+- Push notifications (`PushOptIn`, `api/push/*`) exist mainly for new-task alerts — may become unused
+
+**Not decided yet:** which of the above go, and whether Ideas (`/idea`), meeting sharing (`/meetings/shared`), and employee admin stay.
+
+### 12.2a Change #3 — Two tiers only: Employee and Admin (decided 2026-11-13)
+
+**Decision (owner):** MeetUp has exactly **2 tiers: Employee and Admin**. The old CEO/leadership tier **becomes Admin**. Owner also wants **"extra stuff" removed** (list still to come — see 12.2b).
+
+**Today (code, 2026-11-13):** 3 tiers in `designations.capability_tier`: `standard`, `manager` (company-scoped, added by 0020), `leadership` (CEO). Checked in ~12 routes + `Nav.tsx`, `admin/employees` page.
+**Implied changes (to confirm):**
+- `leadership` → `admin` (rename in DB check constraint, all route checks, Nav). Admin keeps: employee management (`/admin/employees`, `api/admin/*`, `api/users`).
+- `manager` tier + "Manager" designation (0020) removed; **existing Manager users need a decision** (become Employee?).
+- Leadership-only views (org performance, today tiles, task register) disappear with the task removal in 12.2 unless owner wants an admin dashboard of meetings.
+- Open: what exactly can Admin do beyond managing employees? (e.g. see all meetings, manage the department list, see the sheet link.)
+
+### 12.2b Change #4 — Ideas and meeting sharing removed (decided 2026-11-13)
+
+**Decision (owner):** **Ideas**, **meeting sharing**, and **direct task delegation** are not required in MeetUp now. (Delegation already covered in 12.2 — it happens from the sheet via MIS.)
+- Ideas: `/idea`, `api/ideas`, `ideas` table (0007)
+- Meeting sharing: `/meetings/shared`, `api/meetings/shared`, `meeting_shares` table (0019)
+- ⚠️ Interpretation to confirm: "idea sharing" read as *Ideas* **and** *meeting sharing* both going. DB tables are not dropped without explicit go-ahead + export first.
+
+### 12.2c Change #5 — Push out, PWA stays, no companies, admin links the sheet (decided 2026-11-13)
+
+**Decisions (owner):**
+- **Push notifications: REMOVED** (`PushOptIn`, `api/push/subscribe`, `webpush.ts`, `push_subscriptions` table 0021, VAPID keys/env). Moot anyway: they existed for new-task alerts.
+- **PWA: KEPT** (manifest, icons, installable shell — §8.13). Verify the shell still works once push/service-worker bits are removed.
+- **Company selection / company tag: NOT REQUIRED.** Only the 2 tiers (Admin, Employee) remain — no Ecoste/Lamora/Metamask scoping. Affects `companies` table, `company_id` on users/meetings, designations (tier now = role only), onboarding/claim flow, employee admin form, sign-in code (0016/0017).
+- **Sheet details: owner will provide later.**
+- **Admin panel: add "Sheet connection" settings** — an admin can link a new/different sheet from the admin panel (no code change/redeploy) in future. Admin panel therefore = **Manage employees + Sheet link (+ departments, TBC)**.
+
+**Change #6 — Old data not needed (owner, 2026-11-13): "we do not need old data, keep yourself free".** So no export/backup step and no need to keep columns for compatibility. We take option (b): a **real clean-up migration** — drop `tasks`, `task_extensions`, `ideas`, `meeting_shares`, `push_subscriptions`, the performance/leadership views, `companies`/company_id, `manager` tier; old meetings/tasks/ideas rows are discarded; new lean schema (users + role admin/employee, departments, meetings with title/department/MOM/action items, sheet settings).
+- Still to confirm: do **employee accounts / logins** count as "old data"? (Recommend KEEP users + auth so the team isn't re-onboarded.)
+- Build-time rule: the destructive migration is shown to the owner and run only on their explicit go-ahead at build time.
+
+### 12.2d Change #7 — Admin-managed email + password login (decided 2026-11-13)
+
+**Decision (owner):** replace the first-time sign-up / claim flow with **simple session-based login managed by the admin**:
+- Admin panel: **add employee** = save **email + password**; **remove employee**.
+- Employee logs in with that email + password → session. No self-signup, no OTP.
+- **Forgot password:** employee goes to the admin; admin **resets the password** from the panel.
+
+**Today (code):** employees are pre-registered, then claim their account via emailed one-time code (Mailjet SMTP via Supabase Auth): `app/claim`, `api/auth/claim`, `api/auth/pending/*`, `auth/callback`, `password_set` flag (0015). All of that goes away.
+**Implementation direction:** keep Supabase Auth (sessions, hashing) but admin creates/updates users server-side with the service-role key (`auth.admin.createUser` / `updateUserById`), admin-only route. Removing an employee = delete/disable the auth user. Mailjet/email setup no longer needed. Passwords are stored hashed by Supabase — admin sets them but can never read them back.
+**Answered by owner (2026-11-13):**
+- Employee **cannot** change their own password — only the admin sets/resets it. No self-service change screen.
+- **No** forced password change on first login.
+- **Session length: 15 days**, then login again.
+- When an employee is removed, **their recorded meetings stay** (in the sheet and in the app). So removal must not cascade-delete meetings: keep the meeting rows (store recorder's name/email on the meeting) and block/delete only the login.
+
+### 12.2e Change #8 — Sheet layout: one tab per department (decided 2026-11-13)
+
+**Decision (owner):** the sheet has **one tab per department**. Reason: easier data management, and the sheet data also feeds other management dashboards.
+**Implications (to confirm):**
+- A meeting row is written to the tab matching the department chosen before recording.
+- Tab name = department name. When the admin adds a department in the admin panel, the app should **auto-create the tab** (with header row) so no manual sheet work is needed.
+- Every tab must have **identical column headers in identical order**, so dashboards can read all tabs the same way (dashboards break if tabs differ).
+- Renaming/removing a department must not orphan or delete its tab/data (rename = rename tab; remove = leave the tab, stop writing).
+- Dashboards usually want a combined view — optional **"All" tab** (auto-filled copy) vs. dashboards reading every tab themselves. Owner to decide.
+- Row shape still open (per meeting vs per action item); for dashboards, **one row per action item** (meeting title/MOM repeated) is easiest to filter/count, but repeats the MOM text. A Meetings tab + Action Items tab per department doubles the tabs.
+
+### 12.2f Change #9 — The full flow + action-item fields + Save → Supabase → sheet (decided 2026-11-13)
+
+**Flow (owner):**
+1. Before the meeting starts, user selects **Department** from a dropdown.
+2. Meeting is recorded; MeetUp does its work (transcribe → Claude).
+3. MeetUp generates: **title**, **MOM**, and **all action tasks**. Each action task has: **name** (assignee), **task description**, **deadline**, **reporting to** (person name) — all extracted from the meeting.
+4. User sees the result and clicks **Save**. (So there IS a review step: Save is the confirm — resolves old open question 7.)
+5. On Save: data goes **to Supabase first, then to the sheet** (the department's tab).
+
+**Architecture (agreed direction):** Supabase = source of truth; sheet = synced copy for MIS/dashboards. Save writes the meeting + action items to Supabase and marks `sheet_status = pending`; the same request then appends to the sheet; on success → `synced`, on failure → `failed` with an automatic retry + a visible "retry sync" for admin, so a Google outage never loses a meeting or blocks the user. Idempotent (meeting id in each row) so a retry never duplicates rows.
+
+**Proposed tab columns (same on every department tab — owner to confirm):**
+Meeting ID · Date · Meeting title · MOM · Recorded by · Assignee name · Task description · Deadline · Reporting to · Synced at
+(**No Department column** — the tab name is the department. Owner decision 2026-11-13. Note: if dashboards later combine tabs, they must take the department from the tab name.)
+(**Superseded by §12.2g: one row per meeting, tasks across columns.**)
+
+### 12.2g Change #10 — One row per MEETING; action tasks spread across columns (decided 2026-11-13)
+
+**Decision (owner):** a meeting with several action tasks stays on **one row**. Each extra task goes into **additional columns to the right**, same row. This **replaces** the earlier "one row per action item" proposal.
+
+**Layout (each tab):**
+Meeting ID · Date · Meeting title · MOM · Recorded by · **Task 1: Assignee · Task 1: Description · Task 1: Deadline · Task 1: Reporting to** · **Task 2: Assignee · …** · Task 3 … · Synced at
+(No Department column — tab name is the department.)
+
+**Answered by owner (2026-11-13): max 10 tasks per meeting, never more.** Headers are pre-created for exactly 10 tasks (40 task columns), identical on every tab. The Claude prompt is told to return at most 10 action items (merge/prioritise if the meeting has more) and the server also enforces the cap, so no overflow handling is needed.
+
+**Implications (remaining ones, now resolved except as noted):**
+- Header row needs a **fixed max number of tasks** (proposal: pre-create headers for 10 tasks = 40 task columns), or the app grows the header when a meeting has more. Fixed is safer: all tabs stay identical, dashboards don't break.
+- If a meeting has more tasks than the max → decision needed (extend columns automatically, or put the overflow into an "Extra tasks" cell).
+- Trade-off for dashboards: this is wider and harder to filter/count per task (e.g. "all tasks for Rahul") than one-row-per-task; owner chose it knowing this. Can be revisited.
+- Sync is a single row append/update per meeting (simpler than N rows; retry-safe via Meeting ID).
+
+### 12.2h Change #11 — FINAL sheet layout: one column per task (decided 2026-11-13) — supersedes the 46-column layout in 12.2f/12.2g
+
+**Header row, identical on every department tab (16 columns). No Department column — tab name is the department:**
+
+| Col | Header |
+|---|---|
+| A | Meeting ID |
+| B | Date |
+| C | Meeting Title |
+| D | MOM |
+| E | Recorded By |
+| F–O | Task 1 · Task 2 · … · Task 10 |
+| P | Synced At |
+
+**Task cell format (multi-line, one cell per task):**
+```
+Assignee: <name>
+Task: <description>
+Deadline: <dd-Mmm-yyyy>
+Reporting to: <name>
+```
+- Max 10 tasks per meeting (cols F–O); unused task cells stay empty. One row per meeting.
+- Date = meeting date/time in IST. Meeting ID is the retry key (hide the column if it clutters).
+- Reason (owner): the person who delegates in person reads one cell per task and has everything in one place.
+- Known trade-off: dashboards can't filter by assignee directly (details are text inside a cell). If needed later, add hidden helper columns to the right of Synced At without changing what MIS sees.
+- Supabase still stores tasks as structured fields (assignee, description, deadline, reporting_to); the cell text is generated from them.
+
+### 12.2i Change #12 — Names matched, English only, admin manages departments (decided 2026-11-13)
+
+- **Names match the employee list:** assignee and reporting-to are matched to the employee directory so spelling in the sheet is always the canonical employee name (the existing Devanagari→Latin + directory-match logic in `lib/server/claude.ts` is reused). If a spoken name matches nobody, it is written as heard, and the user can fix it in the edit step before Save.
+- **English only:** title, MOM and task text are always written in English, whatever language the meeting is in (Hindi/Hinglish transcripts are translated into English output).
+- **Admin manages the department list** in the admin panel: add / rename / deactivate. Adding creates the sheet tab automatically; rename renames the tab; deactivate keeps the tab and data but removes it from the dropdown (§12.2e).
+
+### 12.2j Change #13 — Keep a simple meeting history screen (decided 2026-11-13)
+
+- The app **keeps its own meeting history** (data is in Supabase anyway, so only a UI is needed). Owner: **keep it very simple.**
+- Proposed scope: `/meetings` = a plain list of the user's own meetings (title · department · date · sheet-synced status), tap one to open a **read-only** detail (title, MOM, tasks). No sharing, no scoring, no filters beyond maybe department. Admin sees all meetings.
+- Sheet-sync status (synced / pending / failed) shown here, with admin "retry sync" for failed ones (§12.2f).
+- Not decided: whether employees can edit a saved meeting later (default: no; edit only before Save).
+
+### 12.3 Open questions (blocking the flow map)
+1. Which sheet — **Google Sheets** (my assumption), Excel/OneDrive, or other? Who owns it / one shared sheet or one per department/company?
+2. Row shape — **one row per meeting** (action items packed in one cell) or **one row per action item** (meeting columns repeated), or two tabs (Meetings + Action Items)?
+3. Columns wanted — department, title, MOM, action items (owner / deadline / report-to?), date, recorded-by, company, transcript, audio link?
+4. Department list — fixed list (who maintains it?) or editable by admin? Per company or shared across Ecoste / Lamora / Metamask?
+5. Does the app still need its own meeting pages/history, or is the sheet the only output?
+6. ~~Action items as in-app tasks?~~ **ANSWERED: no — delegation moves to the sheet (MIS dept).** Still open: per action item, what fields does MIS need (task, owner name, deadline, report-to)?
+7. ~~Review before sheet?~~ **ANSWERED: user reviews, clicks Save.** **Also ANSWERED (2026-11-13): yes, the user can edit title, MOM and every action-item field (add/remove/change tasks, max 10) before clicking Save.** What the user saves is what goes to Supabase and the sheet.
+8. Language of MOM/title — English always, or follow the meeting's language?
+
+### 12.4 BUILD STATUS — 2026-11-13 (code written; NOT yet deployed)
+
+**Built (in the working tree, not committed):** migration `0022_v2_meeting_sheet.sql`; server (`lib/server/sheets.ts`, `meetingSync.ts`, `appSettings.ts`, new `claude.ts` extraction, simplified `auth.ts`); APIs (meetings save/list/detail/sync, departments, admin employees/departments/sheet/retry, users); UI (login, record page with department dropdown + editable review + Save, simple My Meetings, admin: all meetings / employees / departments / sheet connection); proxy with 15-day login cookie; push + PWA-worker cleanup (PWA manifest kept); all old task/idea/sharing/push/claim code deleted; `web-push` dependency removed.
+
+**Verified:** `tsc` clean · `eslint` clean · `next build` succeeds · unit checks pass for the sheet row layout (16 columns, task cells, IST dates, 10-task cap), department-name rules, sheet-link parsing and employee-name matching.
+
+**NOT verified (needs real credentials/DB/devices):** the migration against the live database · any real Google Sheets write (service account never exercised) · login/logout flow and the 15-day cookie in a real browser · a full record → transcribe → Claude → review → Save run · PWA install after the change · Claude title/MOM/task quality on real Hinglish meetings.
+
+**Hand-over / go-live steps (in order):**
+1. Google Cloud: create service account (+ enable Sheets API), JSON key → set `GOOGLE_SERVICE_ACCOUNT_EMAIL` and `GOOGLE_SERVICE_ACCOUNT_KEY` in Vercel. Remove `NEXT_PUBLIC_VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`.
+2. **Deploy code and run migration 0022 together** — new code needs `users.role`; old code breaks without the old tables. Expect a few minutes of downtime. Everyone is signed out once (new 15-day login cookie).
+3. After the migration, check an admin exists: `select name, email, role from users;` — the old CEO becomes admin only if their designation was `leadership`. If not: `update users set role='admin' where email='<ceo email>';`
+4. Sign in as admin → Departments (add them) → Sheet Connection (share a blank sheet with the robot email, paste link, Connect) → Employees (existing logins keep their old passwords; reset any as needed).
+5. Record one real test meeting end-to-end and confirm the row in the right tab.
+
+**Known follow-ups:** automatic background retry of failed syncs (v1 = admin "Retry"); deadline is date-only; `supabase/setup.sql` still creates the v1 schema (run 0022 after it) — regenerate it as v2 later.
