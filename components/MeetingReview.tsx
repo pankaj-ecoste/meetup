@@ -1,7 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
+import { createAutoSave, watchInteraction } from '@/lib/autoSave'
 import { MAX_TASKS, type ExtractedMeeting, type MeetingTask, type SheetStatus } from '@/lib/types'
 
 export type SaveResult = { id: string; sheet_status: SheetStatus; sheet_error: string | null }
@@ -81,8 +82,55 @@ export default function MeetingReview({
     }
   }
 
+  // Auto-save: a 10 s countdown starts when this screen appears. If the person
+  // does NOTHING for those 10 s the meeting is saved for them; any touch, tap,
+  // key press or scroll (or leaving the page) cancels it for good and Save stays
+  // theirs. Nothing was edited if it fires, so the values in `save` are exactly
+  // what is on screen. If the save fails the usual error shows and it does not
+  // retry. Saving twice is safe on the server (one meeting per recording).
+  // See lib/autoSave.ts.
+  const [autoLeft, setAutoLeft] = useState<number | null>(null)
+  const saveRef = useRef(save)
+  useEffect(() => {
+    saveRef.current = save
+  })
+  const canAutoSave = useRef((initial.title ?? '').trim().length > 0)
+  useEffect(() => {
+    if (!canAutoSave.current) return // no title -> nothing worth saving blind
+    let live = true
+    const auto = createAutoSave({
+      onTick: (s) => { if (live) setAutoLeft(s) },
+      onFire: () => {
+        if (!live) return
+        setAutoLeft(null)
+        if (document.visibilityState === 'visible') void saveRef.current()
+      },
+      onCancel: () => { if (live) setAutoLeft(null) },
+    })
+    const unwatch = watchInteraction(document, () => auto.cancel())
+    auto.start()
+    return () => {
+      live = false
+      unwatch()
+      auto.cancel()
+    }
+  }, [])
+
   return (
     <div className="space-y-5">
+      {autoLeft !== null && (
+        <div
+          className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-amber-50 border-b border-amber-200 text-sm text-amber-900 flex items-center justify-between gap-3"
+          role="status"
+          aria-live="off"
+        >
+          <span>
+            Saving automatically in <b>{autoLeft}s</b>
+          </span>
+          <span className="text-xs text-amber-700">Touch anything to stop</span>
+        </div>
+      )}
+
       <p className="text-xs text-gray-500">
         Department: <span className="font-medium text-gray-800">{departmentName}</span> · Check and edit
         anything below, then Save.
