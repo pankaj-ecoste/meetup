@@ -1,16 +1,25 @@
+import { after } from 'next/server'
 import { supabaseAdmin } from '@/lib/server/supabaseAdmin'
-import { verifyWebhookSecret, getTranscript } from '@/lib/server/assemblyai'
-import { extractMeeting } from '@/lib/server/claude'
+import { verifyWebhookSecret } from '@/lib/server/assemblyai'
+import { claimJob, friendlyTranscriptionError, processCompleted } from '@/lib/server/jobPipeline'
 
 export const runtime = 'nodejs'
 
-const NO_SPEECH =
-  'No speech detected in the recording. Please record again and speak clearly for a few seconds.'
-
 // POST /api/recordings/webhook — AssemblyAI callback. NOT user-authed: it is
-// authenticated by the AssemblyAI webhook secret header. Finds the job by
-// transcript id, runs Claude extraction, and writes the result. Idempotent:
-// a duplicate callback for an already-finished job is ignored.
+// authenticated by the AssemblyAI webhook secret header.
+//
+// AssemblyAI waits only 10 SECONDS for a 2xx; otherwise it counts the delivery
+// as failed and re-sends every 10 s (up to 10 times). The slow work here — fetch
+// the transcript, run Claude, 30-60 s — therefore must NOT happen before we
+// answer. So this handler only:
+//   1. verifies the secret,
+//   2. atomically CLAIMS the job (transcribing -> extracting; exactly one caller
+//      can win, so a re-send or a racing reaper run is acknowledged and ignored),
+//   3. replies 200 at once, and
+//   4. does the real work in after(), which keeps the function alive after the
+//      response is sent (Vercel waitUntil).
+// If that background work dies, the job stays in `extracting` and the stuck-job
+// checker (/api/cron/reap-jobs) picks it up.
 export async function POST(request: Request) {
   // Secret gate first — reject anything not carrying our webhook secret.
   if (!verifyWebhookSecret(request)) {
@@ -28,7 +37,7 @@ export async function POST(request: Request) {
   const admin = supabaseAdmin()
   const { data: job } = await admin
     .from('recording_jobs')
-    .select('id, job_type, status, created_at')
+    .select('id, status')
     .eq('transcript_id', transcriptId)
     .single()
 
@@ -38,41 +47,24 @@ export async function POST(request: Request) {
     return Response.json({ ok: true, note: 'already processed' })
   }
 
-  const update = (fields: Record<string, unknown>) =>
-    admin.from('recording_jobs').update(fields).eq('id', job.id)
-
-  try {
-    // AssemblyAI itself reported a failure. Its "no spoken audio" error is
-    // internal jargon ("language_detection cannot be performed on files with
-    // no spoken audio") and reaches the user as a red box they can do nothing
-    // with — so it is translated into the same actionable message an empty
-    // transcript already produces.
-    if (body?.status === 'error') {
-      const raw = body.error ?? ''
-      const msg = /no spoken audio|no audio/i.test(raw) ? NO_SPEECH : raw || 'Transcription failed'
-      await update({ status: 'error', error_msg: msg })
-      return Response.json({ ok: true })
-    }
-
-    const { text, taggedText } = await getTranscript(transcriptId)
-    if (!text.trim()) {
-      await update({ status: 'error', transcript: '', error_msg: NO_SPEECH })
-      return Response.json({ ok: true })
-    }
-
-    // Speaker-tagged transcript so Claude can reason about who said what.
-    await update({ status: 'extracting', transcript: taggedText })
-
-    // Employee directory → Claude + the server match spoken names to it.
-    const { data: people } = await admin.from('users').select('name').eq('is_active', true).order('name')
-    const names = (people ?? []).map((p) => p.name as string)
-
-    const result = await extractMeeting(taggedText, names)
-    await update({ status: 'done', result })
-    return Response.json({ ok: true })
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Pipeline failed'
-    await update({ status: 'error', error_msg: msg })
+  // AssemblyAI itself reported a failure. Its "no spoken audio" error is
+  // internal jargon and reaches the user as a red box they can do nothing with —
+  // so it is translated into an actionable message.
+  if (body?.status === 'error') {
+    await claimJob(admin, job.id, ['pending', 'transcribing'], {
+      status: 'error',
+      error_msg: friendlyTranscriptionError(body.error ?? ''),
+    })
     return Response.json({ ok: true })
   }
+
+  // Exactly-once: only the caller that flips transcribing -> extracting runs the
+  // pipeline. A duplicate delivery (or the reaper) finds it already taken.
+  const claimed = await claimJob(admin, job.id, ['transcribing'], { status: 'extracting' })
+  if (!claimed) {
+    return Response.json({ ok: true, note: 'already being processed' })
+  }
+
+  after(() => processCompleted(job.id, transcriptId))
+  return Response.json({ ok: true })
 }

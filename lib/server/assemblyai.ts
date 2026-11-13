@@ -115,4 +115,23 @@ export async function getTranscript(transcriptId: string): Promise<TranscriptRes
   return { text, taggedText }
 }
 
+/**
+ * Ask AssemblyAI where a transcript stands, without caring about its text.
+ * Used by the stuck-job checker to find out whether a transcription actually
+ * finished (and only our webhook was lost) or is still running or failed.
+ * `status` is one of queued | processing | completed | error.
+ */
+export async function getTranscriptStatus(
+  transcriptId: string,
+): Promise<{ status: string; error: string | null }> {
+  const res = await fetch(`${API_BASE}/transcript/${transcriptId}`, {
+    headers: { authorization: apiKey() },
+  })
+  if (!res.ok) {
+    throw new Error(`AssemblyAI status check failed (${res.status})`)
+  }
+  const data = (await res.json()) as { status: string; error?: string | null }
+  return { status: data.status, error: data.error ?? null }
+}
+
 export { WEBHOOK_HEADER }
