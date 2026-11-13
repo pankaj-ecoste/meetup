@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { useAdmin } from '@/lib/useAdmin'
+import { MIN_PASSWORD_LENGTH } from '@/lib/passwordPolicy'
 import type { EmployeeRow } from '@/lib/types'
 
 const INPUT =
@@ -99,14 +100,14 @@ export default function EmployeesPage() {
         <h3 className="text-sm font-semibold text-gray-900">Add employee</h3>
         <input className={INPUT} placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} />
         <input className={INPUT} type="email" placeholder="Email (their login)" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <input className={INPUT} type="text" placeholder="Password (min 6 characters)" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="off" />
+        <input className={INPUT} type="text" placeholder={`Password (min ${MIN_PASSWORD_LENGTH} characters)`} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="off" />
         <select className={`${INPUT} bg-white`} value={role} onChange={(e) => setRole(e.target.value as 'employee' | 'admin')}>
           <option value="employee">Employee</option>
           <option value="admin">Admin</option>
         </select>
         <button
           onClick={add}
-          disabled={busy || !name.trim() || !email.trim() || password.length < 6}
+          disabled={busy || !name.trim() || !email.trim() || password.length < MIN_PASSWORD_LENGTH}
           className="w-full bg-indigo-600 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
         >
           Add employee
@@ -141,10 +142,10 @@ export default function EmployeesPage() {
               </div>
               {resetFor === r.id && (
                 <div className="mt-3 flex gap-2">
-                  <input className={INPUT} type="text" placeholder="New password (min 6)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="off" />
+                  <input className={INPUT} type="text" placeholder={`New password (min ${MIN_PASSWORD_LENGTH})`} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="off" />
                   <button
                     onClick={() => reset(r.id, r.name)}
-                    disabled={busy || newPassword.length < 6}
+                    disabled={busy || newPassword.length < MIN_PASSWORD_LENGTH}
                     className="px-4 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
                   >
                     Set

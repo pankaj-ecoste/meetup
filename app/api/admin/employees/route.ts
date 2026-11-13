@@ -2,11 +2,11 @@ import { requireAdmin, HttpError } from '@/lib/server/auth'
 import { supabaseAdmin } from '@/lib/server/supabaseAdmin'
 import { jsonError } from '@/lib/server/http'
 import type { EmployeeRow } from '@/lib/types'
+import { MIN_PASSWORD_LENGTH as MIN_PASSWORD } from '@/lib/passwordPolicy'
 
 export const runtime = 'nodejs'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const MIN_PASSWORD = 6
 
 // GET /api/admin/employees — ADMIN. Everyone currently active.
 export async function GET(request: Request) {

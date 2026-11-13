@@ -1,10 +1,9 @@
 import { requireAdmin, HttpError } from '@/lib/server/auth'
 import { supabaseAdmin } from '@/lib/server/supabaseAdmin'
 import { jsonError } from '@/lib/server/http'
+import { MIN_PASSWORD_LENGTH as MIN_PASSWORD } from '@/lib/passwordPolicy'
 
 export const runtime = 'nodejs'
-
-const MIN_PASSWORD = 6
 
 async function activeAdminCount(): Promise<number> {
   const { count } = await supabaseAdmin()
