@@ -929,3 +929,11 @@ Reporting to: <name>
 5. Record one real test meeting end-to-end and confirm the row in the right tab.
 
 **Known follow-ups:** automatic background retry of failed syncs (v1 = admin "Retry"); deadline is date-only; `supabase/setup.sql` still creates the v1 schema (run 0022 after it) — regenerate it as v2 later.
+
+### 12.5 GO-LIVE LOG — 2026-11-13
+- Code pushed to `main` (commit `2309d8b`).
+- Old audio: 163 files in the `audio` bucket deleted (owner-approved).
+- Migration `0022_v2_meeting_sheet.sql` applied to the live DB and verified: tables = users, departments, meetings, recording_jobs, app_settings; 15 users kept (3 admin: info@, founderoffice@, ai.support@ecoste.in; 12 employee); departments/meetings empty. Removed: 31 tasks, 2 extensions, 1 idea, 10 shares, 3 push subs, 10 old meetings, 163 old recording jobs, companies, designations.
+- Users with no login yet (admin must set a password in Employees): Paramjeet Singh, Kirti.
+- Owner shared the DB password in chat to allow the migration — advised to reset it (the app does not use it).
+- Still to do: Google env vars in Vercel + redeploy; add departments; connect sheet; one real end-to-end test meeting.
