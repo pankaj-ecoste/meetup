@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/server/supabaseAdmin'
 import { jsonError } from '@/lib/server/http'
 import { submitTranscription } from '@/lib/server/assemblyai'
 import { BUCKET, VALID_JOB_TYPES, isOwnedPath, MIN_AUDIO_BYTES } from '@/lib/server/recordings'
+import { enforceDailyRecordingLimit } from '@/lib/server/recordingLimit'
 
 export const runtime = 'nodejs'
 
@@ -50,6 +51,10 @@ export async function POST(request: Request) {
     if (!isOwnedPath(storagePath, user.id)) {
       throw new HttpError(400, 'Invalid recording path')
     }
+
+    // Checked again here, not only at upload-url: this is the step that actually
+    // creates the paid job, so it must hold even if upload-url was skipped.
+    await enforceDailyRecordingLimit(user)
 
     const admin = supabaseAdmin()
 

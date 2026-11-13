@@ -2,6 +2,7 @@ import { requireUser, HttpError } from '@/lib/server/auth'
 import { supabaseAdmin } from '@/lib/server/supabaseAdmin'
 import { jsonError } from '@/lib/server/http'
 import { BUCKET, VALID_JOB_TYPES, extFromFilename, storagePathFor } from '@/lib/server/recordings'
+import { enforceDailyRecordingLimit } from '@/lib/server/recordingLimit'
 
 export const runtime = 'nodejs'
 
@@ -33,6 +34,10 @@ export async function POST(request: Request) {
     if (!VALID_JOB_TYPES.has(jobType)) {
       throw new HttpError(400, 'Invalid job_type')
     }
+
+    // Refuse BEFORE the browser uploads a large file that would be rejected at
+    // step 3 anyway. (The recording stays on the user's device.)
+    await enforceDailyRecordingLimit(user)
 
     const ext = extFromFilename(body?.filename)
     const path = storagePathFor(user.id, ext)
