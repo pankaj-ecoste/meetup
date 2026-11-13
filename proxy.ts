@@ -31,8 +31,13 @@ export async function proxy(request: NextRequest) {
     }
   )
 
-  // Must call getUser() (not getSession()) to properly validate the JWT
-  const { data: { user } } = await supabase.auth.getUser()
+  // getClaims() verifies the JWT signature locally against the project's public
+  // signing keys (cached), so no network round trip to Supabase Auth on every
+  // page load. It still refreshes the session when the token is near expiry.
+  // This is only the page gate: every API route re-checks the user in the DB
+  // (requireUser), so an employee removed mid-token is still blocked there.
+  const { data: claimsData } = await supabase.auth.getClaims()
+  const user = claimsData?.claims ?? null
 
   const { pathname } = request.nextUrl
 

@@ -5,16 +5,19 @@ import type { UserProfile } from '@/lib/types'
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  // Local JWT verification (no Supabase Auth round trip) — proxy.ts already
+  // gated and refreshed the session; this just needs the verified user id.
+  const { data: claimsData } = await supabase.auth.getClaims()
+  const authId = claimsData?.claims?.sub
 
-  if (!user) redirect('/login')
+  if (!authId) redirect('/login')
 
   // One query here, passed to Nav as a prop (Nav used to re-fetch on every
   // navigation, which made tab switches laggy).
   const { data: row } = await supabase
     .from('users')
     .select('id, name, email, role')
-    .eq('auth_id', user.id)
+    .eq('auth_id', authId)
     .eq('is_active', true)
     .single()
 

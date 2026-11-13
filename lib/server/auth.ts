@@ -30,15 +30,27 @@ export async function requireUser(req: Request): Promise<UserProfile> {
   const token = bearerToken(req)
   const admin = supabaseAdmin()
 
-  const { data: authData, error: authError } = await admin.auth.getUser(token)
-  if (authError || !authData?.user) {
+  // Verify the JWT signature + expiry locally (public signing keys, cached) —
+  // no network round trip to Supabase Auth per request. The is_active lookup
+  // below still hits the DB, so a removed employee is blocked immediately even
+  // though their token has not expired yet.
+  // getClaims THROWS on a token it cannot even parse (getUser used to return an
+  // error object), so any failure here must map to a clean 401, never a 500.
+  let authId: string | undefined
+  try {
+    const { data: claimsData, error: authError } = await admin.auth.getClaims(token)
+    if (!authError) authId = claimsData?.claims?.sub
+  } catch {
+    authId = undefined
+  }
+  if (!authId) {
     throw new HttpError(401, 'Invalid or expired token')
   }
 
   const { data, error } = await admin
     .from('users')
     .select('id, name, email, phone, role, is_active')
-    .eq('auth_id', authData.user.id)
+    .eq('auth_id', authId)
     .eq('is_active', true)
     .single()
 
