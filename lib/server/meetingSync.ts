@@ -1,14 +1,23 @@
 import 'server-only'
 import { supabaseAdmin } from './supabaseAdmin'
-import { upsertMeetingRow, SheetError } from './sheets'
+import { upsertMeetingRow, appendMeetingRowFast, SheetError } from './sheets'
 import type { MeetingTask, SheetStatus } from '../types'
 
 /**
  * Push one saved meeting to the linked sheet and record the outcome on the
  * meeting row. NEVER throws: the meeting is already safe in Supabase, so a
  * Google problem only flips sheet_status to 'failed' (admin can retry).
+ *
+ * `fresh` = this is the first-ever send of a meeting that was inserted a moment
+ * ago by the Save click, so its row cannot exist yet and the fast 1-call append
+ * is safe. Every retry (admin) leaves it false and takes the careful
+ * look-up-by-Meeting-ID path, because an earlier attempt may have written the
+ * row before dying.
  */
-export async function syncMeeting(meetingId: string): Promise<{ status: SheetStatus; error: string | null }> {
+export async function syncMeeting(
+  meetingId: string,
+  opts: { fresh?: boolean } = {},
+): Promise<{ status: SheetStatus; error: string | null }> {
   const admin = supabaseAdmin()
 
   const fail = async (msg: string) => {
@@ -28,7 +37,8 @@ export async function syncMeeting(meetingId: string): Promise<{ status: SheetSta
     const sheetId = settings?.sheet_id as string | null | undefined
     if (!sheetId) return await fail('No sheet is linked yet. An admin must link one in Sheet connection.')
 
-    await upsertMeetingRow(sheetId, m.department_name, {
+    const write = opts.fresh ? appendMeetingRowFast : upsertMeetingRow
+    await write(sheetId, m.department_name, {
       id: m.id,
       created_at: m.created_at,
       title: m.title,

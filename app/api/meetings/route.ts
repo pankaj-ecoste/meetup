@@ -143,7 +143,9 @@ export async function POST(request: Request) {
     }
 
     // Meeting is safe in Supabase; now the sheet. Never throws.
-    const sync = await syncMeeting(meeting.id)
+    // fresh: this call just inserted the row (unique job_id guarantees a single
+    // inserter), so the sheet cannot have it yet — the 1-call fast path is safe.
+    const sync = await syncMeeting(meeting.id, { fresh: true })
     return Response.json(
       { id: meeting.id, sheet_status: sync.status, sheet_error: sync.error },
       { status: 201 },

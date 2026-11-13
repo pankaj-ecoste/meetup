@@ -175,6 +175,41 @@ export async function renameTab(spreadsheetId: string, from: string, to: string)
 }
 
 /**
+ * Fast path for a meeting that has NEVER been sent to the sheet (the Save
+ * click): append the row straight away — 1 Google call instead of 4. A brand
+ * new meeting cannot already have a row, so listing tabs, rewriting the header
+ * and scanning column A first (what upsertMeetingRow does) is wasted time the
+ * user spends waiting on the Save button.
+ *
+ * It falls back to the careful upsertMeetingRow whenever anything is off:
+ *  - any error (tab missing, quota, network). The careful path looks the row up
+ *    by Meeting ID first, so even if this append actually landed and only the
+ *    reply was lost, nothing is duplicated.
+ *  - the row landed in row 1, i.e. the tab was empty (header deleted). The
+ *    careful path rewrites the header — over that row — then appends the
+ *    meeting again, so the tab ends up with a header and exactly one row.
+ */
+export async function appendMeetingRowFast(
+  spreadsheetId: string,
+  tabName: string,
+  meeting: SheetMeeting,
+): Promise<void> {
+  try {
+    const res = await sheetsFetch<{ updates?: { updatedRange?: string } }>(
+      `/${spreadsheetId}/values/${encodeURIComponent(`${q(tabName)}!A1`)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+      { method: 'POST', body: JSON.stringify({ values: [meetingToRow(meeting, new Date())] }) },
+    )
+    // updatedRange looks like 'Sales'!A7:P7 — a department name can't contain "!",
+    // so the first "!" is the sheet/range separator.
+    const first = /![A-Z]+(\d+)/.exec(res.updates?.updatedRange ?? '')
+    if (!first || Number(first[1]) >= 2) return // landed below the header: done
+  } catch {
+    // fall through to the careful path
+  }
+  await upsertMeetingRow(spreadsheetId, tabName, meeting)
+}
+
+/**
  * Write the meeting as ONE row in `tabName`. Meeting ID (column A) is the key:
  * if a row with this id already exists it is overwritten, so a retry can never
  * create a duplicate.
