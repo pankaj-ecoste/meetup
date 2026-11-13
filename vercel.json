@@ -1,6 +1,7 @@
 {
   "regions": ["icn1"],
   "crons": [
-    { "path": "/api/cron/reap-jobs", "schedule": "*/5 * * * *" }
+    { "path": "/api/cron/reap-jobs", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/purge-audio", "schedule": "30 20 * * *" }
   ]
 }
