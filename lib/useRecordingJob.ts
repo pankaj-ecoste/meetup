@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { api } from '@/lib/api'
 import { deleteRecording } from '@/lib/recordingStore'
+import { createJobPoller } from '@/lib/jobPoller'
 import type { JobStatus } from '@/lib/types'
 
 export type RecordingStage =
@@ -25,17 +26,9 @@ export const STAGE_LABEL: Record<RecordingStage, string> = {
   error: '',
 }
 
-// Realtime is the primary way this resolves. This interval is a reliability
-// net only — if a Realtime event is ever missed/dropped, polling still
-// finishes the job within one interval instead of leaving an infinite spinner.
-const POLL_INTERVAL_MS = 6000
-
-// Nothing in the pipeline ever gave up: if the AssemblyAI webhook never
-// arrived, the job sat in `transcribing` and the UI spun forever. Ten real jobs
-// are stuck that way in production. After this long, stop waiting and show a
-// real error — generous enough for a 60-minute recording, which AssemblyAI
-// typically turns around in a few minutes.
-const JOB_TIMEOUT_MS = 15 * 60 * 1000
+// Realtime is the primary way this resolves. The polling timings (fast while
+// Realtime is down, slow while it is up) and the 15-minute give-up live in
+// lib/jobPoller.ts — it is the reliability net that prevents an infinite spinner.
 
 // Private Supabase Storage bucket the browser uploads audio into directly,
 // using the one-path signed token minted by /api/recordings/upload-url.
@@ -57,11 +50,12 @@ export function useRecordingJob(jobType: 'meeting') {
   const [jobId, setJobId] = useState<string | null>(null)
 
   const jobIdRef = useRef<string | null>(null)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollRef = useRef<ReturnType<typeof createJobPoller> | null>(null)
+  const realtimeOkRef = useRef(false)
   const resolvedRef = useRef(false)
 
   const clearPoll = useCallback(() => {
-    if (pollRef.current) clearInterval(pollRef.current)
+    pollRef.current?.stop()
     pollRef.current = null
   }, [])
 
@@ -127,6 +121,7 @@ export function useRecordingJob(jobType: 'meeting') {
       applyStatus(job)
       if (resolvedRef.current) return
 
+      realtimeOkRef.current = false
       const channel = supabase
         .channel(`job-${job.id}`)
         .on(
@@ -137,13 +132,18 @@ export function useRecordingJob(jobType: 'meeting') {
             if (resolvedRef.current) channel.unsubscribe()
           },
         )
-        .subscribe()
 
-      const startedAt = Date.now()
-      pollRef.current = setInterval(async () => {
-        if (resolvedRef.current || !jobIdRef.current) return
-
-        if (Date.now() - startedAt > JOB_TIMEOUT_MS) {
+      // Fallback poller: slow while Realtime is connected, fast while it is not.
+      const poller = createJobPoller({
+        fetchJob: async () => {
+          if (!jobIdRef.current) return
+          const j = await api.recordingJob(token, jobIdRef.current)
+          applyStatus(j)
+          if (resolvedRef.current) channel.unsubscribe()
+        },
+        isResolved: () => resolvedRef.current,
+        realtimeOk: () => realtimeOkRef.current,
+        onTimeout: () => {
           resolvedRef.current = true
           clearPoll()
           channel.unsubscribe()
@@ -151,17 +151,21 @@ export function useRecordingJob(jobType: 'meeting') {
             'This is taking longer than expected and may have stalled. Your recording is saved — please try again, or check back shortly.',
           )
           setStage('error')
-          return
-        }
+        },
+      })
+      pollRef.current = poller
 
-        try {
-          const j = await api.recordingJob(token, jobIdRef.current)
-          applyStatus(j)
-          if (resolvedRef.current) channel.unsubscribe()
-        } catch {
-          // transient — the next tick or Realtime will pick it up
+      channel.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          realtimeOkRef.current = true
+          // The job may have finished between "job created" and "channel
+          // connected" — no event would ever arrive for that, so look once now.
+          poller.checkNow()
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          realtimeOkRef.current = false // back to fast polling
         }
-      }, POLL_INTERVAL_MS)
+      })
+      poller.start()
     } catch (e) {
       setErrMsg(e instanceof Error ? e.message : 'Upload failed')
       setStage('error')
